@@ -12,8 +12,8 @@
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:integration": "npm run test:integration --workspace @educ/api",
-    "db:migrate": "npm run db:migrate --workspace @educ/api",
-    "db:seed": "npm run db:seed --workspace @educ/api"
+    "db:migrate": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/platform} npm run db:migrate --workspace @educ/api",
+    "db:seed": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/platform} npm run db:seed --workspace @educ/api"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
