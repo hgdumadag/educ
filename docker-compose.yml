@@ -1,0 +1,50 @@
+version: '3.9'
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: platform
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+    ports:
+      - "3000:3000"
+    volumes:
+      - uploads_data:/app/data/uploads
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - web
+      - api
+    ports:
+      - "80:80"
+    volumes:
+      - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  postgres_data:
+  uploads_data:

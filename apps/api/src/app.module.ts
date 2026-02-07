@@ -1,0 +1,13 @@
+import { Module } from "@nestjs/common";
+
+import { AdminModule } from "./admin/admin.module.js";
+import { AuthModule } from "./auth/auth.module.js";
+import { ExamsModule } from "./exams/exams.module.js";
+import { LessonsModule } from "./lessons/lessons.module.js";
+import { OpenAiModule } from "./openai/openai.module.js";
+import { PrismaModule } from "./prisma/prisma.module.js";
+
+@Module({
+  imports: [PrismaModule, OpenAiModule, AuthModule, AdminModule, LessonsModule, ExamsModule],
+})
+export class AppModule {}

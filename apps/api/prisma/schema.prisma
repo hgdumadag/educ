@@ -1,0 +1,145 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoleKey {
+  admin
+  teacher
+  student
+}
+
+enum AttemptStatus {
+  in_progress
+  submitted
+  graded
+  needs_review
+}
+
+model User {
+  id               String       @id @default(cuid())
+  email            String       @unique
+  passwordHash     String
+  role             RoleKey
+  isActive         Boolean      @default(true)
+  refreshTokenHash String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  uploadedLessons  Lesson[]     @relation("lesson_uploader")
+  uploadedExams    Exam[]       @relation("exam_uploader")
+  studentAssignments Assignment[] @relation("assignment_student")
+  teacherAssignments Assignment[] @relation("assignment_teacher")
+  attempts         Attempt[]    @relation("attempt_student")
+  auditEvents      AuditEvent[] @relation("audit_actor")
+  updatedRoleLabels RoleLabel[] @relation("role_label_updater")
+}
+
+model RoleLabel {
+  roleKey     RoleKey  @id
+  displayLabel String
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
+  updatedBy User? @relation("role_label_updater", fields: [updatedById], references: [id], onDelete: SetNull)
+}
+
+model Lesson {
+  id           String   @id @default(cuid())
+  title        String
+  gradeLevel   String?
+  subject      String
+  contentPath  String
+  metadataJson Json
+  uploadedById String
+  isDeleted    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  uploadedBy  User         @relation("lesson_uploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  assignments Assignment[]
+}
+
+model Exam {
+  id                      String   @id @default(cuid())
+  title                   String
+  subject                 String
+  settingsJson            Json
+  normalizedJson          Json
+  normalizedSchemaVersion String
+  uploadedById            String
+  isDeleted               Boolean  @default(false)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  uploadedBy  User         @relation("exam_uploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  assignments Assignment[]
+  attempts    Attempt[]
+}
+
+model Assignment {
+  id                  String   @id @default(cuid())
+  assigneeStudentId   String
+  assignedByTeacherId String
+  lessonId            String?
+  examId              String?
+  dueAt               DateTime?
+  createdAt           DateTime @default(now())
+
+  assigneeStudent   User   @relation("assignment_student", fields: [assigneeStudentId], references: [id], onDelete: Cascade)
+  assignedByTeacher User   @relation("assignment_teacher", fields: [assignedByTeacherId], references: [id], onDelete: Restrict)
+  lesson            Lesson? @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  exam              Exam?   @relation(fields: [examId], references: [id], onDelete: Cascade)
+
+  @@index([assigneeStudentId, dueAt])
+}
+
+model Attempt {
+  id                 String        @id @default(cuid())
+  examId             String
+  studentId          String
+  status             AttemptStatus @default(in_progress)
+  startedAt          DateTime      @default(now())
+  submittedAt        DateTime?
+  scorePercent       Int?
+  gradingSummaryJson Json?
+
+  exam      Exam      @relation(fields: [examId], references: [id], onDelete: Cascade)
+  student   User      @relation("attempt_student", fields: [studentId], references: [id], onDelete: Cascade)
+  responses Response[]
+
+  @@index([studentId, examId, status])
+}
+
+model Response {
+  id          String   @id @default(cuid())
+  attemptId   String
+  questionId  String
+  answerJson  Json
+  gradingJson Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  attempt Attempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@unique([attemptId, questionId])
+  @@index([attemptId, questionId])
+}
+
+model AuditEvent {
+  id          String   @id @default(cuid())
+  actorUserId String
+  action      String
+  entityType  String
+  entityId    String?
+  metadataJson Json?
+  createdAt   DateTime @default(now())
+
+  actor User @relation("audit_actor", fields: [actorUserId], references: [id], onDelete: Cascade)
+
+  @@index([actorUserId, createdAt])
+}

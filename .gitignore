@@ -1,0 +1,15 @@
+node_modules
+npm-debug.log*
+.DS_Store
+.env
+.env.*
+!.env.example
+coverage
+dist
+build
+apps/*/dist
+apps/*/coverage
+packages/*/dist
+*.tsbuildinfo
+data/uploads/*
+!data/uploads/.gitkeep
