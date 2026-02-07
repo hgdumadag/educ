@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Inject,
   Post,
   UseGuards,
 } from "@nestjs/common";
@@ -15,7 +16,7 @@ import { RefreshDto } from "./dto/refresh.dto.js";
 
 @Controller("auth")
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(@Inject(AuthService) private readonly authService: AuthService) {}
 
   @Post("login")
   async login(@Body() dto: LoginDto) {

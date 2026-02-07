@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -31,8 +32,8 @@ interface ValidationResult {
 @Injectable()
 export class ExamsService {
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly openAiService: OpenAiService,
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(OpenAiService) private readonly openAiService: OpenAiService,
   ) {}
 
   private async persistFile(file: UploadedFile): Promise<string> {

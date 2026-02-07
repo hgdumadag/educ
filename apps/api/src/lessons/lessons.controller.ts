@@ -2,6 +2,7 @@ import {
   Controller,
   Delete,
   Get,
+  Inject,
   Param,
   Post,
   UploadedFile,
@@ -22,7 +23,7 @@ import { LessonsService } from "./lessons.service.js";
 @Controller("lessons")
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class LessonsController {
-  constructor(private readonly lessonsService: LessonsService) {}
+  constructor(@Inject(LessonsService) private readonly lessonsService: LessonsService) {}
 
   @Post("upload")
   @Roles(RoleKey.teacher, RoleKey.admin)

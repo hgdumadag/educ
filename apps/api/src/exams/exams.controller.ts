@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Inject,
   Param,
   Patch,
   Post,
@@ -26,7 +27,7 @@ import { ExamsService } from "./exams.service.js";
 @Controller()
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ExamsController {
-  constructor(private readonly examsService: ExamsService) {}
+  constructor(@Inject(ExamsService) private readonly examsService: ExamsService) {}
 
   @Post("exams/upload")
   @Roles(RoleKey.teacher, RoleKey.admin)

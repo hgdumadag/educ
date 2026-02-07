@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -24,7 +25,7 @@ interface LessonUploadResult {
 
 @Injectable()
 export class LessonsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
   private async persistFile(file: UploadedFile): Promise<string> {
     const directory = path.join(env.uploadLocalPath, "lessons");

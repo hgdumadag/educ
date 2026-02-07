@@ -1,4 +1,5 @@
 import {
+  Inject,
   Injectable,
   UnauthorizedException,
 } from "@nestjs/common";
@@ -37,7 +38,7 @@ const PERMISSIONS: Record<RoleKey, string[]> = {
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
   private async getDisplayLabel(role: RoleKey): Promise<string> {
     const roleLabel = await this.prisma.roleLabel.findUnique({ where: { roleKey: role } });

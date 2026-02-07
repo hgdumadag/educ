@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { RoleKey } from "@prisma/client";
 
 import { PrismaService } from "../prisma/prisma.service.js";
@@ -18,7 +18,7 @@ const DEFAULT_LABELS: Record<RoleKey, string> = {
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
   async createUser(actor: AuthenticatedUser, dto: CreateUserDto) {
     const user = await this.prisma.user.create({

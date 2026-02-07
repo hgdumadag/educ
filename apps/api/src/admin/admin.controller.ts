@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Header,
+  Inject,
   Param,
   Patch,
   Post,
@@ -25,7 +26,7 @@ import { UpdateUserDto } from "./dto/update-user.dto.js";
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(RoleKey.admin)
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(@Inject(AdminService) private readonly adminService: AdminService) {}
 
   @Post("users")
   async createUser(
