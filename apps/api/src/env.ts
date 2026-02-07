@@ -1,7 +1,16 @@
 import path from "node:path";
+import dotenv from "dotenv";
+
+// Load env from API-local .env first, then repository-root .env when running via workspace scripts.
+dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+dotenv.config({ path: path.resolve(process.cwd(), "../../.env") });
 
 function readEnv(name: string, fallback?: string): string {
-  const value = process.env[name] ?? fallback;
+  if (!process.env[name] && fallback) {
+    process.env[name] = fallback;
+  }
+
+  const value = process.env[name];
   if (!value) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
@@ -31,5 +40,5 @@ export const env = {
   openAiApiKey: process.env.OPENAI_API_KEY ?? "",
   openAiModel: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
   uploadStorageMode: process.env.UPLOAD_STORAGE_MODE ?? "local",
-  uploadLocalPath: path.resolve(process.cwd(), process.env.UPLOAD_LOCAL_PATH ?? "./data/uploads"),
+  uploadLocalPath: path.resolve(process.cwd(), process.env.UPLOAD_LOCAL_PATH ?? "../../data/uploads"),
 };
