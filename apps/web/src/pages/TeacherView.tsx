@@ -85,6 +85,9 @@ export function TeacherView() {
     <div className="stack">
       <section className="panel">
         <h3>Upload Lesson ZIP</h3>
+        <p className="muted">
+          Upload a lesson package ZIP containing <code>metadata.json</code> and <code>content.md</code>.
+        </p>
         <form onSubmit={handleLessonUpload} className="stack">
           <input type="file" accept=".zip" onChange={(event) => setLessonFile(event.target.files?.[0] ?? null)} />
           <button type="submit">Upload Lesson</button>
@@ -93,6 +96,9 @@ export function TeacherView() {
 
       <section className="panel">
         <h3>Upload Exam JSON</h3>
+        <p className="muted">
+          Upload an exam JSON file with valid objective answer keys and question metadata.
+        </p>
         <form onSubmit={handleExamUpload} className="stack">
           <input type="file" accept=".json,application/json" onChange={(event) => setExamFile(event.target.files?.[0] ?? null)} />
           <button type="submit">Upload Exam</button>
@@ -101,6 +107,9 @@ export function TeacherView() {
 
       <section className="panel">
         <h3>Create Assignment</h3>
+        <p className="muted">
+          Assign one uploaded exam to one or more students. Student IDs come from your admin.
+        </p>
         <form onSubmit={handleAssignment} className="stack">
           <label>
             Exam
@@ -115,7 +124,11 @@ export function TeacherView() {
           </label>
           <label>
             Student IDs (comma separated)
-            <input value={studentIds} onChange={(event) => setStudentIds(event.target.value)} />
+            <input
+              value={studentIds}
+              onChange={(event) => setStudentIds(event.target.value)}
+              placeholder="clx123..., clx456..."
+            />
           </label>
           <label>
             Assignment Type
@@ -137,6 +150,9 @@ export function TeacherView() {
               onChange={(event) => setMaxAttempts(event.target.value)}
             />
           </label>
+          <p className="muted">
+            If blank, defaults are applied automatically: practice = 3 attempts, assessment = 1 attempt.
+          </p>
           <button type="submit">Assign</button>
         </form>
       </section>

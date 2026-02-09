@@ -17,6 +17,7 @@ export function LoginForm({ onLogin, loading }: LoginFormProps) {
   return (
     <form onSubmit={handleSubmit} className="panel">
       <h2>Sign In</h2>
+      <p className="muted">Enter the email and password provided by your admin.</p>
       <label>
         Email
         <input

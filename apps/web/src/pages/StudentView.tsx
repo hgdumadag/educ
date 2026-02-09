@@ -98,6 +98,12 @@ export function StudentView() {
     <div className="stack">
       <section className="panel">
         <h3>Assigned Exams</h3>
+        <p className="muted">
+          Pick an exam below, start an attempt, save responses during work, then submit when finished.
+        </p>
+        {examAssignments.length === 0 ? (
+          <p className="muted">No assigned exams yet. Contact your teacher if you expected one.</p>
+        ) : null}
         <ul>
           {examAssignments.map((assignment) => (
             <li key={assignment.id}>
@@ -117,6 +123,7 @@ export function StudentView() {
         <section className="panel">
           <h3>{selectedExam.title}</h3>
           <p>Exam ID: {selectedAssignmentExamId}</p>
+          <p className="muted">Step 1: Click Start Attempt. Step 2: Answer questions. Step 3: Autosave. Step 4: Submit.</p>
           <form onSubmit={startAttempt}>
             <button type="submit">Start Attempt</button>
           </form>
