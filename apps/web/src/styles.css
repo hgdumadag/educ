@@ -99,6 +99,126 @@ button:hover {
   margin-bottom: 0.35rem;
 }
 
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.tile-card {
+  text-align: left;
+  background: #ffffff;
+  border: 1px solid #c7d2e5;
+  color: #1f2a44;
+  padding: 0.9rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.tile-card h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1.02rem;
+}
+
+.tile-card p {
+  margin: 0 0 0.6rem;
+  color: #4f5d75;
+}
+
+.tile-card .tile-cta {
+  font-size: 0.86rem;
+  color: #0d6efd;
+}
+
+.tile-card:hover {
+  background: #ffffff;
+  border-color: #7fa6ef;
+  transform: translateY(-1px);
+}
+
+.tile-card.active {
+  border-color: #0d6efd;
+  box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.12);
+}
+
+.assignment-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.assignment-card {
+  text-align: left;
+  background: #ffffff;
+  color: #1f2a44;
+  border: 1px solid #c7d2e5;
+  padding: 0.85rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.assignment-card:hover {
+  background: #ffffff;
+  border-color: #7fa6ef;
+  transform: translateY(-1px);
+}
+
+.assignment-card.active {
+  border-color: #0d6efd;
+  box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.12);
+}
+
+.assignment-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.assignment-head h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.assignment-meta {
+  margin: 0.15rem 0;
+  color: #30415f;
+  font-size: 0.9rem;
+}
+
+.badge {
+  border-radius: 999px;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.badge.practice {
+  background: #e8f3ff;
+  color: #0052b3;
+}
+
+.badge.assessment {
+  background: #fdecec;
+  color: #9b1c1c;
+}
+
+.question-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.question-card {
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 0.75rem;
+}
+
+.question-title {
+  font-weight: 600;
+}
+
 pre {
   white-space: pre-wrap;
 }

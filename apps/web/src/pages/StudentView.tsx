@@ -30,6 +30,18 @@ export function StudentView() {
     () => assignments.filter((assignment) => assignment.examId && assignment.exam),
     [assignments],
   );
+  const selectedAssignment = useMemo(
+    () => examAssignments.find((assignment) => assignment.id === selectedAssignmentId) ?? null,
+    [examAssignments, selectedAssignmentId],
+  );
+  const answeredCount = useMemo(() => {
+    if (!selectedExam) {
+      return 0;
+    }
+
+    return selectedExam.questions.filter((question) => (answers[question.id] ?? "").trim().length > 0).length;
+  }, [selectedExam, answers]);
+  const totalQuestions = selectedExam?.questions.length ?? 0;
 
   async function loadExam(assignmentId: string, examId: string) {
     setSelectedAssignmentId(assignmentId);
@@ -104,58 +116,101 @@ export function StudentView() {
         {examAssignments.length === 0 ? (
           <p className="muted">No assigned exams yet. Contact your teacher if you expected one.</p>
         ) : null}
-        <ul>
-          {examAssignments.map((assignment) => (
-            <li key={assignment.id}>
-              <button onClick={() => loadExam(assignment.id, assignment.examId!)}>
-                {assignment.exam?.title} ({assignment.exam?.subject})
+        <div className="assignment-grid">
+          {examAssignments.map((assignment) => {
+            const isActive = assignment.id === selectedAssignmentId;
+            const remainingAttempts = Math.max(assignment.maxAttempts - assignment.attemptsUsed, 0);
+
+            return (
+              <button
+                key={assignment.id}
+                type="button"
+                className={`assignment-card ${isActive ? "active" : ""}`}
+                onClick={() => loadExam(assignment.id, assignment.examId!)}
+              >
+                <div className="assignment-head">
+                  <h4>{assignment.exam?.title}</h4>
+                  <span className={`badge ${assignment.assignmentType}`}>
+                    {assignment.assignmentType}
+                  </span>
+                </div>
+                <p className="muted">{assignment.exam?.subject}</p>
+                <p className="assignment-meta">
+                  Attempts used: {assignment.attemptsUsed}/{assignment.maxAttempts}
+                </p>
+                <p className="assignment-meta">Remaining attempts: {remainingAttempts}</p>
+                <span className="tile-cta">{isActive ? "Viewing below" : "Open details"}</span>
               </button>
-              <span>
-                {" "}
-                {assignment.assignmentType} | attempts {assignment.attemptsUsed}/{assignment.maxAttempts}
-              </span>
-            </li>
-          ))}
-        </ul>
+            );
+          })}
+        </div>
       </section>
 
       {selectedExam ? (
         <section className="panel">
-          <h3>{selectedExam.title}</h3>
-          <p>Exam ID: {selectedAssignmentExamId}</p>
-          <p className="muted">Step 1: Click Start Attempt. Step 2: Answer questions. Step 3: Autosave. Step 4: Submit.</p>
+          <div className="row">
+            <div>
+              <h3>{selectedExam.title}</h3>
+              <p className="muted">{selectedExam.subject}</p>
+              <p className="muted">Assignment ID: {selectedAssignmentId}</p>
+              <p className="muted">Exam ID: {selectedAssignmentExamId}</p>
+            </div>
+            <div>
+              <p className="muted">Answered: {answeredCount}/{totalQuestions}</p>
+              {selectedAssignment ? (
+                <p className="muted">
+                  Attempts: {selectedAssignment.attemptsUsed}/{selectedAssignment.maxAttempts}
+                </p>
+              ) : null}
+            </div>
+          </div>
+          <p className="muted">Step 1: Start attempt. Step 2: Answer and autosave. Step 3: Submit.</p>
           <form onSubmit={startAttempt}>
-            <button type="submit">Start Attempt</button>
+            <button type="submit" disabled={!selectedAssignment || !!attemptId}>
+              {attemptId ? "Attempt Started" : "Start Attempt"}
+            </button>
           </form>
 
           <form onSubmit={saveAnswers} className="stack">
-            {selectedExam.questions.map((question) => (
-              <label key={question.id}>
-                {question.id}: {question.prompt}
-                {question.choices && question.choices.length > 0 ? (
-                  <select
-                    value={answers[question.id] ?? ""}
-                    onChange={(event) => setAnswers((prev) => ({ ...prev, [question.id]: event.target.value }))}
-                  >
-                    <option value="">Select</option>
-                    {question.choices.map((choice) => (
-                      <option key={choice} value={choice}>
-                        {choice}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <textarea
-                    value={answers[question.id] ?? ""}
-                    onChange={(event) => setAnswers((prev) => ({ ...prev, [question.id]: event.target.value }))}
-                  />
-                )}
-              </label>
-            ))}
-            <button type="submit">Autosave Responses</button>
+            <div className="question-list">
+              {selectedExam.questions.map((question, index) => (
+                <div className="question-card" key={question.id}>
+                  <label>
+                    <span className="question-title">
+                      Q{index + 1}. {question.prompt}
+                    </span>
+                    <span className="muted">Question ID: {question.id}</span>
+                    {question.choices && question.choices.length > 0 ? (
+                      <select
+                        value={answers[question.id] ?? ""}
+                        onChange={(event) => setAnswers((prev) => ({ ...prev, [question.id]: event.target.value }))}
+                      >
+                        <option value="">Select</option>
+                        {question.choices.map((choice) => (
+                          <option key={choice} value={choice}>
+                            {choice}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <textarea
+                        value={answers[question.id] ?? ""}
+                        onChange={(event) => setAnswers((prev) => ({ ...prev, [question.id]: event.target.value }))}
+                        placeholder="Type your answer"
+                      />
+                    )}
+                  </label>
+                </div>
+              ))}
+            </div>
+            <button type="submit" disabled={!attemptId}>
+              Autosave Responses
+            </button>
           </form>
 
-          <button onClick={submitAttempt}>Submit Attempt</button>
+          <button onClick={submitAttempt} disabled={!attemptId}>
+            Submit Attempt
+          </button>
         </section>
       ) : null}
 
