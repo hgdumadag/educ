@@ -296,9 +296,32 @@ export class ExamsService {
       throw new ForbiddenException("Exam is not assigned to this student");
     }
 
+    if (assignment.dueAt && new Date() > assignment.dueAt) {
+      throw new BadRequestException("Assignment is past due");
+    }
+
     const exam = await this.prisma.exam.findUnique({ where: { id: dto.examId } });
     if (!exam || exam.isDeleted) {
       throw new NotFoundException("Exam not found");
+    }
+
+    const existingAttempt = await this.prisma.attempt.findFirst({
+      where: {
+        examId: dto.examId,
+        studentId: student.id,
+        status: "in_progress",
+      },
+      select: {
+        id: true,
+        examId: true,
+        studentId: true,
+        status: true,
+        startedAt: true,
+      },
+    });
+
+    if (existingAttempt) {
+      return existingAttempt;
     }
 
     return this.prisma.attempt.create({
@@ -318,7 +341,10 @@ export class ExamsService {
   }
 
   async saveResponses(student: AuthenticatedUser, attemptId: string, dto: SaveResponsesDto) {
-    const attempt = await this.prisma.attempt.findUnique({ where: { id: attemptId } });
+    const attempt = await this.prisma.attempt.findUnique({
+      where: { id: attemptId },
+      include: { exam: true },
+    });
 
     if (!attempt) {
       throw new NotFoundException("Attempt not found");
@@ -330,6 +356,19 @@ export class ExamsService {
 
     if (attempt.status !== "in_progress") {
       throw new BadRequestException("Only in-progress attempts can be autosaved");
+    }
+
+    const normalized = attempt.exam.normalizedJson as unknown as NormalizedExam;
+    if (!normalized || !Array.isArray(normalized.questions)) {
+      throw new BadRequestException("Exam schema is missing or malformed");
+    }
+
+    const validQuestionIds = new Set(normalized.questions.map((question) => question.id));
+    const invalidQuestionIds = dto.responses
+      .map((response) => response.questionId)
+      .filter((questionId) => !validQuestionIds.has(questionId));
+    if (invalidQuestionIds.length > 0) {
+      throw new BadRequestException("One or more responses reference invalid question IDs");
     }
 
     await this.prisma.$transaction(
@@ -408,6 +447,21 @@ export class ExamsService {
 
     if (attempt.status !== "in_progress") {
       throw new BadRequestException("Attempt is already submitted");
+    }
+
+    const assignment = await this.prisma.assignment.findFirst({
+      where: {
+        assigneeStudentId: student.id,
+        examId: attempt.examId,
+      },
+    });
+
+    if (!assignment) {
+      throw new ForbiddenException("Exam is not assigned to this student");
+    }
+
+    if (assignment.dueAt && new Date() > assignment.dueAt) {
+      throw new BadRequestException("Assignment is past due");
     }
 
     const exam = attempt.exam.normalizedJson as unknown as NormalizedExam;
