@@ -2,13 +2,9 @@ import { FormEvent, useState } from "react";
 
 import { api } from "../api/client";
 
-interface Props {
-  accessToken: string;
-}
-
-export function AdminView({ accessToken }: Props) {
-  const [email, setEmail] = useState("teacher1@example.com");
-  const [password, setPassword] = useState("Teacher123!");
+export function AdminView() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [role, setRole] = useState<"teacher" | "student">("teacher");
   const [message, setMessage] = useState("");
   const [audit, setAudit] = useState<Array<{ id: string; action: string; createdAt: string }>>([]);
@@ -16,7 +12,7 @@ export function AdminView({ accessToken }: Props) {
   async function handleCreateUser(event: FormEvent) {
     event.preventDefault();
     try {
-      await api.createUser(accessToken, { email, password, role });
+      await api.createUser({ email, password, role });
       setMessage("User created.");
     } catch (error) {
       setMessage(String(error));
@@ -25,8 +21,8 @@ export function AdminView({ accessToken }: Props) {
 
   async function loadAudit() {
     try {
-      const events = await api.getAuditEvents(accessToken);
-      setAudit(events.slice(0, 10));
+      const response = await api.getAuditEvents();
+      setAudit(response.items);
     } catch (error) {
       setMessage(String(error));
     }
@@ -37,8 +33,14 @@ export function AdminView({ accessToken }: Props) {
       <section className="panel">
         <h3>Create User</h3>
         <form onSubmit={handleCreateUser} className="stack">
-          <input value={email} onChange={(event) => setEmail(event.target.value)} />
-          <input value={password} onChange={(event) => setPassword(event.target.value)} />
+          <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            minLength={8}
+            required
+          />
           <select value={role} onChange={(event) => setRole(event.target.value as "teacher" | "student")}>
             <option value="teacher">teacher</option>
             <option value="student">student</option>

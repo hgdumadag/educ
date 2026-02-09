@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Delete,
   Get,
@@ -18,7 +19,14 @@ import { JwtAuthGuard } from "../common/guards/jwt-auth.guard.js";
 import { RolesGuard } from "../common/guards/roles.guard.js";
 import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
 import type { UploadedFile as UploadedFileType } from "../common/types/upload-file.type.js";
+import { env } from "../env.js";
 import { LessonsService } from "./lessons.service.js";
+
+const ZIP_CONTENT_TYPES = new Set([
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/octet-stream",
+]);
 
 @Controller("lessons")
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -27,7 +35,21 @@ export class LessonsController {
 
   @Post("upload")
   @Roles(RoleKey.teacher, RoleKey.admin)
-  @UseInterceptors(FileInterceptor("file"))
+  @UseInterceptors(
+    FileInterceptor("file", {
+      limits: { fileSize: env.uploadMaxLessonZipBytes },
+      fileFilter: (_req, file, callback) => {
+        const isZipName = file.originalname.toLowerCase().endsWith(".zip");
+        const isZipType = !file.mimetype || ZIP_CONTENT_TYPES.has(file.mimetype.toLowerCase());
+        if (!isZipName || !isZipType) {
+          callback(new BadRequestException("Only ZIP lesson files are accepted"), false);
+          return;
+        }
+
+        callback(null, true);
+      },
+    }),
+  )
   async upload(
     @CurrentUser() actor: AuthenticatedUser,
     @UploadedFile() file?: UploadedFileType,

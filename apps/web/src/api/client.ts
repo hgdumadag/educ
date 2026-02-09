@@ -1,29 +1,93 @@
-import type { Assignment, ExamDetails, MeResponse, Session } from "../types";
+import type { Assignment, ExamDetails, MeResponse } from "../types";
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000/api";
+const CSRF_COOKIE = "educ_csrf_token";
+
+let refreshInFlight: Promise<boolean> | null = null;
+
+function isMutatingMethod(method: string): boolean {
+  const normalized = method.toUpperCase();
+  return normalized === "POST" || normalized === "PATCH" || normalized === "PUT" || normalized === "DELETE";
+}
+
+function readCookie(name: string): string | null {
+  const cookie = document.cookie
+    .split(";")
+    .map((entry) => entry.trim())
+    .find((entry) => entry.startsWith(`${name}=`));
+  if (!cookie) {
+    return null;
+  }
+
+  return decodeURIComponent(cookie.slice(name.length + 1));
+}
+
+async function parseError(response: Response): Promise<string> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    const body = await response.json() as { message?: string | string[] };
+    if (Array.isArray(body.message)) {
+      return body.message.join(", ");
+    }
+    if (typeof body.message === "string") {
+      return body.message;
+    }
+  }
+
+  const text = await response.text();
+  return text || `Request failed with status ${response.status}`;
+}
+
+async function tryRefresh(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      const response = await fetch(`${baseUrl}/auth/refresh`, {
+        method: "POST",
+        credentials: "include",
+      });
+      return response.ok;
+    })();
+  }
+
+  const result = await refreshInFlight;
+  refreshInFlight = null;
+  return result;
+}
 
 async function request<T>(
   path: string,
   options: RequestInit = {},
-  accessToken?: string,
+  shouldRetry = true,
 ): Promise<T> {
+  const method = (options.method ?? "GET").toUpperCase();
   const headers = new Headers(options.headers ?? {});
   if (!headers.has("Content-Type") && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
 
-  if (accessToken) {
-    headers.set("Authorization", `Bearer ${accessToken}`);
+  if (isMutatingMethod(method)) {
+    const csrf = readCookie(CSRF_COOKIE);
+    if (csrf) {
+      headers.set("x-csrf-token", csrf);
+    }
   }
 
   const response = await fetch(`${baseUrl}${path}`, {
     ...options,
+    method,
+    credentials: "include",
     headers,
   });
 
+  if (response.status === 401 && shouldRetry && path !== "/auth/login" && path !== "/auth/refresh") {
+    const refreshed = await tryRefresh();
+    if (refreshed) {
+      return request<T>(path, options, false);
+    }
+  }
+
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Request failed with status ${response.status}`);
+    throw new Error(await parseError(response));
   }
 
   if (response.headers.get("content-type")?.includes("application/json")) {
@@ -34,108 +98,104 @@ async function request<T>(
 }
 
 export const api = {
-  async login(identifier: string, password: string): Promise<{ user: MeResponse } & Session> {
-    return request<{ user: MeResponse } & Session>("/auth/login", {
+  async login(identifier: string, password: string): Promise<{ user: MeResponse }> {
+    return request<{ user: MeResponse }>("/auth/login", {
       method: "POST",
       body: JSON.stringify({ identifier, password }),
     });
   },
 
-  async me(accessToken: string): Promise<MeResponse> {
-    return request<MeResponse>("/auth/me", { method: "GET" }, accessToken);
+  async me(): Promise<MeResponse> {
+    return request<MeResponse>("/auth/me", { method: "GET" });
   },
 
-  async logout(accessToken: string): Promise<void> {
-    await request("/auth/logout", { method: "POST" }, accessToken);
+  async logout(): Promise<void> {
+    await request("/auth/logout", { method: "POST" });
   },
 
-  async createUser(
-    accessToken: string,
-    payload: { email: string; password: string; role: "teacher" | "student" },
-  ) {
+  async createUser(payload: { email: string; password: string; role: "teacher" | "student" }) {
     return request("/admin/users", {
       method: "POST",
       body: JSON.stringify(payload),
-    }, accessToken);
+    });
   },
 
-  async getAuditEvents(accessToken: string) {
-    return request<Array<{ id: string; action: string; createdAt: string }>>(
-      "/admin/audit-events",
+  async getAuditEvents() {
+    return request<{ items: Array<{ id: string; action: string; createdAt: string }> }>(
+      "/admin/audit-events?page=1&pageSize=10",
       { method: "GET" },
-      accessToken,
     );
   },
 
-  async uploadLesson(accessToken: string, file: File) {
+  async uploadLesson(file: File) {
     const body = new FormData();
     body.append("file", file);
-    return request("/lessons/upload", { method: "POST", body }, accessToken);
+    return request("/lessons/upload", { method: "POST", body });
   },
 
-  async uploadExam(accessToken: string, file: File) {
+  async uploadExam(file: File) {
     const body = new FormData();
     body.append("file", file);
-    return request("/exams/upload", { method: "POST", body }, accessToken);
+    return request("/exams/upload", { method: "POST", body });
   },
 
-  async listExams(accessToken: string) {
+  async listExams() {
     return request<Array<{ id: string; title: string; subject: string }>>(
       "/exams",
       { method: "GET" },
-      accessToken,
     );
   },
 
-  async createAssignment(
-    accessToken: string,
-    payload: { studentIds: string[]; examId?: string; lessonId?: string; dueAt?: string },
-  ) {
+  async createAssignment(payload: {
+    studentIds: string[];
+    examId?: string;
+    lessonId?: string;
+    dueAt?: string;
+    assignmentType?: "practice" | "assessment";
+    maxAttempts?: number;
+  }) {
     return request("/assignments", {
       method: "POST",
       body: JSON.stringify(payload),
-    }, accessToken);
+    });
   },
 
-  async myAssignments(accessToken: string): Promise<Assignment[]> {
-    return request<Assignment[]>("/assignments/my", { method: "GET" }, accessToken);
+  async myAssignments(): Promise<Assignment[]> {
+    return request<Assignment[]>("/assignments/my", { method: "GET" });
   },
 
-  async examDetails(accessToken: string, examId: string): Promise<ExamDetails> {
-    return request<ExamDetails>(`/exams/${examId}`, { method: "GET" }, accessToken);
+  async examDetails(examId: string): Promise<ExamDetails> {
+    return request<ExamDetails>(`/exams/${examId}`, { method: "GET" });
   },
 
-  async createAttempt(accessToken: string, examId: string): Promise<{ id: string }> {
+  async createAttempt(assignmentId: string): Promise<{ id: string }> {
     return request<{ id: string }>(
       "/attempts",
       {
         method: "POST",
-        body: JSON.stringify({ examId }),
+        body: JSON.stringify({ assignmentId }),
       },
-      accessToken,
     );
   },
 
   async saveResponses(
-    accessToken: string,
     attemptId: string,
     responses: Array<{ questionId: string; answer: unknown }>,
   ) {
     return request(`/attempts/${attemptId}/responses`, {
       method: "PATCH",
       body: JSON.stringify({ responses }),
-    }, accessToken);
+    });
   },
 
-  async submitAttempt(accessToken: string, attemptId: string) {
+  async submitAttempt(attemptId: string) {
     return request<{ id: string; status: string; scorePercent: number }>(
       `/attempts/${attemptId}/submit`,
       { method: "POST" },
-      accessToken,
     );
   },
 
-  async attemptResult(accessToken: string, attemptId: string) {
-    return request(`/attempts/${attemptId}/result`, { method: "GET" }, accessToken);
+  async attemptResult(attemptId: string) {
+    return request(`/attempts/${attemptId}/result`, { method: "GET" });
   },
 };

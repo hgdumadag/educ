@@ -6,6 +6,8 @@ export type AttemptStatus =
   | "graded"
   | "needs_review";
 
+export type AssignmentType = "practice" | "assessment";
+
 export type QuestionType =
   | "multiple-choice"
   | "true-false"
@@ -19,8 +21,6 @@ export interface AuthUser {
 }
 
 export interface AuthResponse {
-  accessToken: string;
-  refreshToken: string;
   user: AuthUser;
 }
 
@@ -69,6 +69,8 @@ export interface AssignmentCreatePayload {
   lessonId?: string;
   examId?: string;
   dueAt?: string;
+  assignmentType?: AssignmentType;
+  maxAttempts?: number;
 }
 
 export interface AttemptResponsePayload {
@@ -80,4 +82,8 @@ export interface AttemptSubmitSummary {
   objectiveCount: number;
   llmCount: number;
   reviewCount: number;
+}
+
+export interface CreateAttemptPayload {
+  assignmentId: string;
 }

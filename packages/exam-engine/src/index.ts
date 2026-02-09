@@ -97,9 +97,24 @@ function normalizeQuestion(
     if (!Array.isArray(choices) || choices.some((item) => typeof item !== "string")) {
       return { value: null, error: `Malformed answer schema for ${questionId}` };
     }
-    normalized.choices = choices as string[];
-    normalized.correctAnswer =
-      typeof question.correctAnswer === "string" ? question.correctAnswer : undefined;
+    const normalizedChoices = (choices as string[]).map((item) => item.trim()).filter(Boolean);
+    if (normalizedChoices.length < 2) {
+      return { value: null, error: `Multiple-choice question ${questionId} must include at least two options` };
+    }
+    if (typeof question.correctAnswer !== "string" || !question.correctAnswer.trim()) {
+      return { value: null, error: `Multiple-choice question ${questionId} is missing a correctAnswer` };
+    }
+
+    const correctAnswer = question.correctAnswer.trim();
+    if (!normalizedChoices.includes(correctAnswer)) {
+      return {
+        value: null,
+        error: `Multiple-choice question ${questionId} has a correctAnswer not present in choices`,
+      };
+    }
+
+    normalized.choices = normalizedChoices;
+    normalized.correctAnswer = correctAnswer;
   }
 
   if (type === "true-false") {
@@ -108,6 +123,8 @@ function normalizeQuestion(
       normalized.correctAnswer = answer;
     } else if (answer === "true" || answer === "false") {
       normalized.correctAnswer = answer === "true";
+    } else {
+      return { value: null, error: `True/false question ${questionId} is missing a valid correctAnswer` };
     }
   }
 

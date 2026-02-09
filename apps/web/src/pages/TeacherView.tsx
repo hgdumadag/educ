@@ -2,21 +2,19 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api/client";
 
-interface Props {
-  accessToken: string;
-}
-
-export function TeacherView({ accessToken }: Props) {
+export function TeacherView() {
   const [lessonFile, setLessonFile] = useState<File | null>(null);
   const [examFile, setExamFile] = useState<File | null>(null);
   const [studentIds, setStudentIds] = useState("");
   const [examId, setExamId] = useState("");
+  const [assignmentType, setAssignmentType] = useState<"practice" | "assessment">("practice");
+  const [maxAttempts, setMaxAttempts] = useState("");
   const [message, setMessage] = useState("");
   const [exams, setExams] = useState<Array<{ id: string; title: string; subject: string }>>([]);
 
   async function refreshExams() {
     try {
-      setExams(await api.listExams(accessToken));
+      setExams(await api.listExams());
     } catch (error) {
       setMessage(String(error));
     }
@@ -39,7 +37,7 @@ export function TeacherView({ accessToken }: Props) {
     }
 
     try {
-      await api.uploadLesson(accessToken, lessonFile);
+      await api.uploadLesson(lessonFile);
       setMessage("Lesson uploaded.");
     } catch (error) {
       setMessage(String(error));
@@ -54,7 +52,7 @@ export function TeacherView({ accessToken }: Props) {
     }
 
     try {
-      await api.uploadExam(accessToken, examFile);
+      await api.uploadExam(examFile);
       setMessage("Exam uploaded.");
       await refreshExams();
     } catch (error) {
@@ -71,9 +69,11 @@ export function TeacherView({ accessToken }: Props) {
     }
 
     try {
-      await api.createAssignment(accessToken, {
+      await api.createAssignment({
         examId,
         studentIds: studentIdList,
+        assignmentType,
+        maxAttempts: maxAttempts ? Number(maxAttempts) : undefined,
       });
       setMessage("Assignments created.");
     } catch (error) {
@@ -116,6 +116,26 @@ export function TeacherView({ accessToken }: Props) {
           <label>
             Student IDs (comma separated)
             <input value={studentIds} onChange={(event) => setStudentIds(event.target.value)} />
+          </label>
+          <label>
+            Assignment Type
+            <select
+              value={assignmentType}
+              onChange={(event) => setAssignmentType(event.target.value as "practice" | "assessment")}
+            >
+              <option value="practice">practice</option>
+              <option value="assessment">assessment</option>
+            </select>
+          </label>
+          <label>
+            Max Attempts (optional override)
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={maxAttempts}
+              onChange={(event) => setMaxAttempts(event.target.value)}
+            />
           </label>
           <button type="submit">Assign</button>
         </form>

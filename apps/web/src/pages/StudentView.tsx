@@ -3,13 +3,10 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { Assignment, ExamDetails } from "../types";
 
-interface Props {
-  accessToken: string;
-}
-
-export function StudentView({ accessToken }: Props) {
+export function StudentView() {
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [selectedExam, setSelectedExam] = useState<ExamDetails | null>(null);
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
   const [selectedAssignmentExamId, setSelectedAssignmentExamId] = useState("");
   const [attemptId, setAttemptId] = useState("");
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -18,7 +15,7 @@ export function StudentView({ accessToken }: Props) {
 
   async function refreshAssignments() {
     try {
-      const data = await api.myAssignments(accessToken);
+      const data = await api.myAssignments();
       setAssignments(data);
     } catch (error) {
       setMessage(String(error));
@@ -34,10 +31,11 @@ export function StudentView({ accessToken }: Props) {
     [assignments],
   );
 
-  async function loadExam(examId: string) {
+  async function loadExam(assignmentId: string, examId: string) {
+    setSelectedAssignmentId(assignmentId);
     setSelectedAssignmentExamId(examId);
     try {
-      const details = await api.examDetails(accessToken, examId);
+      const details = await api.examDetails(examId);
       setSelectedExam(details);
       setAnswers({});
       setAttemptId("");
@@ -49,12 +47,12 @@ export function StudentView({ accessToken }: Props) {
 
   async function startAttempt(event: FormEvent) {
     event.preventDefault();
-    if (!selectedExam) {
+    if (!selectedExam || !selectedAssignmentId) {
       return;
     }
 
     try {
-      const attempt = await api.createAttempt(accessToken, selectedExam.id);
+      const attempt = await api.createAttempt(selectedAssignmentId);
       setAttemptId(attempt.id);
       setMessage(`Attempt started: ${attempt.id}`);
     } catch (error) {
@@ -71,7 +69,6 @@ export function StudentView({ accessToken }: Props) {
 
     try {
       await api.saveResponses(
-        accessToken,
         attemptId,
         Object.entries(answers).map(([questionId, answer]) => ({ questionId, answer })),
       );
@@ -88,8 +85,8 @@ export function StudentView({ accessToken }: Props) {
     }
 
     try {
-      await api.submitAttempt(accessToken, attemptId);
-      const details = await api.attemptResult(accessToken, attemptId);
+      await api.submitAttempt(attemptId);
+      const details = await api.attemptResult(attemptId);
       setResult(details);
       setMessage("Attempt submitted.");
     } catch (error) {
@@ -104,9 +101,13 @@ export function StudentView({ accessToken }: Props) {
         <ul>
           {examAssignments.map((assignment) => (
             <li key={assignment.id}>
-              <button onClick={() => loadExam(assignment.examId!)}>
+              <button onClick={() => loadExam(assignment.id, assignment.examId!)}>
                 {assignment.exam?.title} ({assignment.exam?.subject})
               </button>
+              <span>
+                {" "}
+                {assignment.assignmentType} | attempts {assignment.attemptsUsed}/{assignment.maxAttempts}
+              </span>
             </li>
           ))}
         </ul>

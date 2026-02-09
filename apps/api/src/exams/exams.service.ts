@@ -5,8 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import type { Prisma } from "@prisma/client";
-import { RoleKey } from "@prisma/client";
+import { Prisma, RoleKey } from "@prisma/client";
 import { gradeObjectiveQuestion, normalizeExamPayload } from "@educ/exam-engine";
 import type { GradedQuestion, NormalizedExam, NormalizedQuestion } from "@educ/shared-types";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -19,6 +18,7 @@ import { env } from "../env.js";
 import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
 import type { UploadedFile } from "../common/types/upload-file.type.js";
 import type { CreateAssignmentDto } from "./dto/create-assignment.dto.js";
+import type { AssignmentTypeValue } from "./dto/create-assignment.dto.js";
 import type { CreateAttemptDto } from "./dto/create-attempt.dto.js";
 import type { SaveResponsesDto } from "./dto/save-responses.dto.js";
 
@@ -229,6 +229,8 @@ export class ExamsService {
     }
 
     const dueAt = dto.dueAt ? new Date(dto.dueAt) : null;
+    const assignmentType: AssignmentTypeValue = dto.assignmentType ?? "practice";
+    const maxAttempts = dto.maxAttempts ?? (assignmentType === "assessment" ? 1 : 3);
 
     const created = await this.prisma.$transaction(
       dto.studentIds.map((studentId) =>
@@ -238,6 +240,8 @@ export class ExamsService {
             assignedByTeacherId: actor.id,
             lessonId: dto.lessonId,
             examId: dto.examId,
+            assignmentType,
+            maxAttempts,
             dueAt,
           },
         }),
@@ -252,6 +256,8 @@ export class ExamsService {
         studentCount: created.length,
         lessonId: dto.lessonId,
         examId: dto.examId,
+        assignmentType,
+        maxAttempts,
       },
     });
 
@@ -259,11 +265,12 @@ export class ExamsService {
   }
 
   async getMyAssignments(student: AuthenticatedUser) {
-    return this.prisma.assignment.findMany({
+    const assignments = await this.prisma.assignment.findMany({
       where: {
         assigneeStudentId: student.id,
       },
       include: {
+        _count: { select: { attempts: true } },
         lesson: {
           select: {
             id: true,
@@ -282,43 +289,97 @@ export class ExamsService {
       },
       orderBy: { createdAt: "desc" },
     });
+
+    return assignments.map((assignment) => ({
+      id: assignment.id,
+      assigneeStudentId: assignment.assigneeStudentId,
+      assignedByTeacherId: assignment.assignedByTeacherId,
+      lessonId: assignment.lessonId,
+      examId: assignment.examId,
+      dueAt: assignment.dueAt,
+      createdAt: assignment.createdAt,
+      assignmentType: assignment.assignmentType,
+      maxAttempts: assignment.maxAttempts,
+      attemptsUsed: assignment._count.attempts,
+      lesson: assignment.lesson,
+      exam: assignment.exam,
+    }));
   }
 
   async createAttempt(student: AuthenticatedUser, dto: CreateAttemptDto) {
-    const assignment = await this.prisma.assignment.findFirst({
-      where: {
-        assigneeStudentId: student.id,
-        examId: dto.examId,
-      },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const assignment = await tx.assignment.findFirst({
+        where: {
+          id: dto.assignmentId,
+          assigneeStudentId: student.id,
+        },
+      });
 
-    if (!assignment) {
-      throw new ForbiddenException("Exam is not assigned to this student");
-    }
+      if (!assignment) {
+        throw new ForbiddenException("Assignment is not available for this student");
+      }
 
-    const exam = await this.prisma.exam.findUnique({ where: { id: dto.examId } });
-    if (!exam || exam.isDeleted) {
-      throw new NotFoundException("Exam not found");
-    }
+      if (!assignment.examId) {
+        throw new BadRequestException("This assignment does not include an exam");
+      }
 
-    return this.prisma.attempt.create({
-      data: {
-        examId: dto.examId,
-        studentId: student.id,
-        status: "in_progress",
-      },
-      select: {
-        id: true,
-        examId: true,
-        studentId: true,
-        status: true,
-        startedAt: true,
-      },
-    });
+      const exam = await tx.exam.findUnique({ where: { id: assignment.examId } });
+      if (!exam || exam.isDeleted) {
+        throw new NotFoundException("Exam not found");
+      }
+
+      const inProgress = await tx.attempt.findFirst({
+        where: {
+          assignmentId: assignment.id,
+          studentId: student.id,
+          status: "in_progress",
+        },
+        select: { id: true },
+      });
+      if (inProgress) {
+        throw new BadRequestException("Complete the in-progress attempt before creating a new one");
+      }
+
+      const attemptsUsed = await tx.attempt.count({
+        where: {
+          assignmentId: assignment.id,
+          studentId: student.id,
+        },
+      });
+      if (attemptsUsed >= assignment.maxAttempts) {
+        throw new BadRequestException("Maximum attempts reached for this assignment");
+      }
+
+      return tx.attempt.create({
+        data: {
+          assignmentId: assignment.id,
+          examId: assignment.examId,
+          studentId: student.id,
+          status: "in_progress",
+        },
+        select: {
+          id: true,
+          assignmentId: true,
+          examId: true,
+          studentId: true,
+          status: true,
+          startedAt: true,
+        },
+      });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   async saveResponses(student: AuthenticatedUser, attemptId: string, dto: SaveResponsesDto) {
-    const attempt = await this.prisma.attempt.findUnique({ where: { id: attemptId } });
+    const attempt = await this.prisma.attempt.findUnique({
+      where: { id: attemptId },
+      include: {
+        exam: {
+          select: {
+            normalizedJson: true,
+          },
+        },
+      },
+    });
 
     if (!attempt) {
       throw new NotFoundException("Attempt not found");
@@ -330,6 +391,21 @@ export class ExamsService {
 
     if (attempt.status !== "in_progress") {
       throw new BadRequestException("Only in-progress attempts can be autosaved");
+    }
+
+    const normalizedExam = attempt.exam.normalizedJson as unknown as NormalizedExam;
+    const validQuestionIds = new Set(
+      Array.isArray(normalizedExam?.questions)
+        ? normalizedExam.questions.map((question) => question.id)
+        : [],
+    );
+
+    const invalidQuestion = dto.responses.find(
+      (response) =>
+        !response.questionId || !validQuestionIds.has(response.questionId) || response.answer === undefined,
+    );
+    if (invalidQuestion) {
+      throw new BadRequestException(`Invalid response payload for question ${invalidQuestion.questionId}`);
     }
 
     await this.prisma.$transaction(
@@ -390,6 +466,32 @@ export class ExamsService {
   }
 
   async submitAttempt(student: AuthenticatedUser, attemptId: string) {
+    const markedSubmitted = await this.prisma.attempt.updateMany({
+      where: {
+        id: attemptId,
+        studentId: student.id,
+        status: "in_progress",
+      },
+      data: {
+        status: "submitted",
+        submittedAt: new Date(),
+      },
+    });
+
+    if (markedSubmitted.count === 0) {
+      const existing = await this.prisma.attempt.findUnique({
+        where: { id: attemptId },
+        select: { id: true, studentId: true, status: true },
+      });
+      if (!existing) {
+        throw new NotFoundException("Attempt not found");
+      }
+      if (existing.studentId !== student.id) {
+        throw new ForbiddenException("Cannot submit another student's attempt");
+      }
+      throw new BadRequestException("Attempt is already submitted");
+    }
+
     const attempt = await this.prisma.attempt.findUnique({
       where: { id: attemptId },
       include: {
@@ -397,17 +499,8 @@ export class ExamsService {
         responses: true,
       },
     });
-
     if (!attempt) {
       throw new NotFoundException("Attempt not found");
-    }
-
-    if (attempt.studentId !== student.id) {
-      throw new ForbiddenException("Cannot submit another student's attempt");
-    }
-
-    if (attempt.status !== "in_progress") {
-      throw new BadRequestException("Attempt is already submitted");
     }
 
     const exam = attempt.exam.normalizedJson as unknown as NormalizedExam;
@@ -441,43 +534,44 @@ export class ExamsService {
     const scorePercent = Math.round(totalScore / Math.max(gradedQuestions.length, 1));
     const status = reviewCount > 0 ? "needs_review" : "graded";
 
-    await this.prisma.$transaction(
-      gradedQuestions.map((result) =>
-        this.prisma.response.upsert({
-          where: {
-            attemptId_questionId: {
+    const updatedAttempt = await this.prisma.$transaction(async (tx) => {
+      await Promise.all(
+        gradedQuestions.map((result) =>
+          tx.response.upsert({
+            where: {
+              attemptId_questionId: {
+                attemptId,
+                questionId: result.questionId,
+              },
+            },
+            update: {
+              gradingJson: result as unknown as Prisma.InputJsonValue,
+            },
+            create: {
               attemptId,
               questionId: result.questionId,
+              answerJson: (responseMap.get(result.questionId) ?? null) as Prisma.InputJsonValue,
+              gradingJson: result as unknown as Prisma.InputJsonValue,
             },
-          },
-          update: {
-            gradingJson: result as unknown as Prisma.InputJsonValue,
-          },
-          create: {
-            attemptId,
-            questionId: result.questionId,
-            answerJson: (responseMap.get(result.questionId) ?? null) as Prisma.InputJsonValue,
-            gradingJson: result as unknown as Prisma.InputJsonValue,
-          },
-        }),
-      ),
-    );
+          }),
+        ),
+      );
 
-    const updatedAttempt = await this.prisma.attempt.update({
-      where: { id: attemptId },
-      data: {
-        status,
-        submittedAt: new Date(),
-        scorePercent,
-        gradingSummaryJson: {
-          objectiveCount,
-          llmCount,
-          reviewCount,
+      return tx.attempt.update({
+        where: { id: attemptId },
+        data: {
+          status,
+          scorePercent,
+          gradingSummaryJson: {
+            objectiveCount,
+            llmCount,
+            reviewCount,
+          },
         },
-      },
-      include: {
-        responses: true,
-      },
+        include: {
+          responses: true,
+        },
+      });
     });
 
     await recordAuditEvent(this.prisma, {
@@ -531,15 +625,13 @@ export class ExamsService {
     }
 
     if (actor.role === RoleKey.teacher) {
-      const assignment = await this.prisma.assignment.findFirst({
+      const assignment = await this.prisma.assignment.findUnique({
         where: {
-          assigneeStudentId: attempt.studentId,
-          examId: attempt.examId,
-          assignedByTeacherId: actor.id,
+          id: attempt.assignmentId,
         },
       });
 
-      if (!assignment) {
+      if (!assignment || assignment.assignedByTeacherId !== actor.id) {
         throw new ForbiddenException("Teacher does not have access to this attempt");
       }
     }

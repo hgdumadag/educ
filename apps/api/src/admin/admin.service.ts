@@ -1,8 +1,10 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { RoleKey } from "@prisma/client";
 
+import { ObservabilityService } from "../observability/observability.service.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { recordAuditEvent } from "../utils/audit.js";
+import { toCsvCell } from "../utils/csv.js";
 import { hashPassword } from "../utils/password.js";
 import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
 import type { CreateUserDto } from "./dto/create-user.dto.js";
@@ -18,7 +20,22 @@ const DEFAULT_LABELS: Record<RoleKey, string> = {
 
 @Injectable()
 export class AdminService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(ObservabilityService) private readonly observability: ObservabilityService,
+  ) {}
+
+  private toPagination(page: number, pageSize: number): { page: number; pageSize: number } {
+    const normalizedPage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+    const normalizedPageSize = Number.isFinite(pageSize) && pageSize > 0
+      ? Math.min(Math.floor(pageSize), 200)
+      : 50;
+
+    return {
+      page: normalizedPage,
+      pageSize: normalizedPageSize,
+    };
+  }
 
   async createUser(actor: AuthenticatedUser, dto: CreateUserDto) {
     const user = await this.prisma.user.create({
@@ -136,28 +153,46 @@ export class AdminService {
     return updated;
   }
 
-  async getAttemptsReport() {
+  async getAttemptsReport(args: { page: number; pageSize: number }) {
+    const { page, pageSize } = this.toPagination(args.page, args.pageSize);
+    const [attempts, total] = await this.prisma.$transaction([
+      this.prisma.attempt.findMany({
+        include: {
+          exam: { select: { id: true, title: true, subject: true } },
+          student: { select: { id: true, email: true } },
+        },
+        orderBy: { startedAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.attempt.count(),
+    ]);
+
+    return {
+      page,
+      pageSize,
+      total,
+      items: attempts.map((attempt) => ({
+        id: attempt.id,
+        status: attempt.status,
+        scorePercent: attempt.scorePercent,
+        startedAt: attempt.startedAt,
+        submittedAt: attempt.submittedAt,
+        student: attempt.student,
+        exam: attempt.exam,
+      })),
+    };
+  }
+
+  async exportAttemptsCsv(): Promise<string> {
     const attempts = await this.prisma.attempt.findMany({
       include: {
         exam: { select: { id: true, title: true, subject: true } },
         student: { select: { id: true, email: true } },
       },
       orderBy: { startedAt: "desc" },
+      take: 10000,
     });
-
-    return attempts.map((attempt) => ({
-      id: attempt.id,
-      status: attempt.status,
-      scorePercent: attempt.scorePercent,
-      startedAt: attempt.startedAt,
-      submittedAt: attempt.submittedAt,
-      student: attempt.student,
-      exam: attempt.exam,
-    }));
-  }
-
-  async exportAttemptsCsv(): Promise<string> {
-    const attempts = await this.getAttemptsReport();
     const header = [
       "attemptId",
       "studentId",
@@ -183,18 +218,34 @@ export class AdminService {
     ]);
 
     return [header, ...rows]
-      .map((cells) => cells.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(","))
+      .map((cells) => cells.map((cell) => toCsvCell(cell)).join(","))
       .join("\n");
   }
 
-  async getAuditEvents() {
-    return this.prisma.auditEvent.findMany({
-      include: {
-        actor: { select: { id: true, email: true, role: true } },
-      },
-      orderBy: { createdAt: "desc" },
-      take: 500,
-    });
+  async getAuditEvents(args: { page: number; pageSize: number }) {
+    const { page, pageSize } = this.toPagination(args.page, args.pageSize);
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.auditEvent.findMany({
+        include: {
+          actor: { select: { id: true, email: true, role: true } },
+        },
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.auditEvent.count(),
+    ]);
+
+    return {
+      page,
+      pageSize,
+      total,
+      items,
+    };
+  }
+
+  getOperationalMetrics() {
+    return this.observability.snapshot();
   }
 
   async assertUserExists(userId: string): Promise<void> {

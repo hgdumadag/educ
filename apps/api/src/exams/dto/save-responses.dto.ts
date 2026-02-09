@@ -1,11 +1,11 @@
 import { Type } from "class-transformer";
-import { IsArray, IsOptional, IsString, ValidateNested } from "class-validator";
+import { IsArray, IsDefined, IsString, ValidateNested } from "class-validator";
 
 class AttemptResponseDto {
   @IsString()
   questionId!: string;
 
-  @IsOptional()
+  @IsDefined()
   answer?: unknown;
 }
 

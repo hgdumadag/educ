@@ -5,16 +5,29 @@ import dotenv from "dotenv";
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 dotenv.config({ path: path.resolve(process.cwd(), "../../.env") });
 
+type CookieSameSite = "lax" | "strict" | "none";
+
 function readEnv(name: string, fallback?: string): string {
-  if (!process.env[name] && fallback) {
-    process.env[name] = fallback;
+  const raw = process.env[name];
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.trim();
   }
 
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
+  if (fallback !== undefined) {
+    return fallback;
   }
-  return value;
+
+  throw new Error(`Missing required environment variable: ${name}`);
+}
+
+function readOptionalEnv(name: string): string | undefined {
+  const raw = process.env[name];
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+
+  const value = raw.trim();
+  return value ? value : undefined;
 }
 
 function readNumber(name: string, fallback: number): number {
@@ -31,14 +44,70 @@ function readNumber(name: string, fallback: number): number {
   return value;
 }
 
+function readBoolean(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "true" || normalized === "1") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "0") {
+    return false;
+  }
+
+  throw new Error(`Invalid boolean value for ${name}`);
+}
+
+function readCsv(name: string, fallback: string[]): string[] {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+
+  const values = raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  return values.length > 0 ? values : fallback;
+}
+
+function readCookieSameSite(name: string, fallback: CookieSameSite): CookieSameSite {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "lax" || normalized === "strict" || normalized === "none") {
+    return normalized;
+  }
+
+  throw new Error(`Invalid same-site value for ${name}`);
+}
+
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? "development",
+  isProduction: (process.env.NODE_ENV ?? "development") === "production",
   port: readNumber("PORT", 3000),
   databaseUrl: readEnv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/platform"),
-  jwtAccessSecret: readEnv("JWT_ACCESS_SECRET", "dev_access_secret"),
-  jwtRefreshSecret: readEnv("JWT_REFRESH_SECRET", "dev_refresh_secret"),
+  jwtAccessSecret: readEnv("JWT_ACCESS_SECRET"),
+  jwtRefreshSecret: readEnv("JWT_REFRESH_SECRET"),
   openAiApiKey: process.env.OPENAI_API_KEY ?? "",
   openAiModel: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
   uploadStorageMode: process.env.UPLOAD_STORAGE_MODE ?? "local",
   uploadLocalPath: path.resolve(process.cwd(), process.env.UPLOAD_LOCAL_PATH ?? "../../data/uploads"),
+  uploadMaxLessonZipBytes: readNumber("UPLOAD_MAX_LESSON_ZIP_BYTES", 10 * 1024 * 1024),
+  uploadMaxExamJsonBytes: readNumber("UPLOAD_MAX_EXAM_JSON_BYTES", 2 * 1024 * 1024),
+  corsOrigins: readCsv("CORS_ORIGINS", ["http://localhost:5173"]),
+  cookieSecure: readBoolean("COOKIE_SECURE", (process.env.NODE_ENV ?? "development") === "production"),
+  cookieDomain: readOptionalEnv("COOKIE_DOMAIN"),
+  cookieSameSite: readCookieSameSite("COOKIE_SAME_SITE", "lax"),
+  redisUrl: readEnv("REDIS_URL", "redis://localhost:6379"),
+  authMaxFailedLogins: readNumber("AUTH_MAX_FAILED_LOGINS", 5),
+  authFailedWindowSeconds: readNumber("AUTH_FAILED_WINDOW_SECONDS", 300),
+  authLockoutSeconds: readNumber("AUTH_LOCKOUT_SECONDS", 900),
 };

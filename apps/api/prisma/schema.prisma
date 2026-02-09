@@ -20,6 +20,11 @@ enum AttemptStatus {
   needs_review
 }
 
+enum AssignmentType {
+  practice
+  assessment
+}
+
 model User {
   id               String       @id @default(cuid())
   email            String       @unique
@@ -37,6 +42,8 @@ model User {
   attempts         Attempt[]    @relation("attempt_student")
   auditEvents      AuditEvent[] @relation("audit_actor")
   updatedRoleLabels RoleLabel[] @relation("role_label_updater")
+
+  @@index([role, isActive])
 }
 
 model RoleLabel {
@@ -87,6 +94,8 @@ model Assignment {
   assignedByTeacherId String
   lessonId            String?
   examId              String?
+  assignmentType      AssignmentType @default(practice)
+  maxAttempts         Int @default(3)
   dueAt               DateTime?
   createdAt           DateTime @default(now())
 
@@ -94,12 +103,14 @@ model Assignment {
   assignedByTeacher User   @relation("assignment_teacher", fields: [assignedByTeacherId], references: [id], onDelete: Restrict)
   lesson            Lesson? @relation(fields: [lessonId], references: [id], onDelete: Cascade)
   exam              Exam?   @relation(fields: [examId], references: [id], onDelete: Cascade)
+  attempts          Attempt[]
 
   @@index([assigneeStudentId, dueAt])
 }
 
 model Attempt {
   id                 String        @id @default(cuid())
+  assignmentId       String
   examId             String
   studentId          String
   status             AttemptStatus @default(in_progress)
@@ -108,11 +119,13 @@ model Attempt {
   scorePercent       Int?
   gradingSummaryJson Json?
 
+  assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
   exam      Exam      @relation(fields: [examId], references: [id], onDelete: Cascade)
   student   User      @relation("attempt_student", fields: [studentId], references: [id], onDelete: Cascade)
   responses Response[]
 
   @@index([studentId, examId, status])
+  @@index([assignmentId, status])
 }
 
 model Response {

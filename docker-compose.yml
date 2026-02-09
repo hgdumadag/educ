@@ -11,14 +11,22 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
   api:
     build:
       context: .
       dockerfile: infra/docker/api.Dockerfile
     env_file:
       - .env
+    environment:
+      REDIS_URL: redis://redis:6379
     depends_on:
       - postgres
+      - redis
     ports:
       - "3000:3000"
     volumes:

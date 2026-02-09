@@ -31,10 +31,10 @@ cp .env.example .env
 npm install
 ```
 
-3. Start Postgres:
+3. Start Postgres + Redis:
 
 ```bash
-docker compose up -d postgres
+docker compose up -d postgres redis
 ```
 
 4. Run Prisma migration and seed:

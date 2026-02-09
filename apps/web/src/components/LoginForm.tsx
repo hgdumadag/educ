@@ -6,8 +6,8 @@ interface LoginFormProps {
 }
 
 export function LoginForm({ onLogin, loading }: LoginFormProps) {
-  const [identifier, setIdentifier] = useState("admin@example.com");
-  const [password, setPassword] = useState("ChangeMe123!");
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -19,7 +19,13 @@ export function LoginForm({ onLogin, loading }: LoginFormProps) {
       <h2>Sign In</h2>
       <label>
         Email
-        <input value={identifier} onChange={(event) => setIdentifier(event.target.value)} />
+        <input
+          type="email"
+          value={identifier}
+          onChange={(event) => setIdentifier(event.target.value)}
+          autoComplete="email"
+          required
+        />
       </label>
       <label>
         Password
@@ -27,6 +33,8 @@ export function LoginForm({ onLogin, loading }: LoginFormProps) {
           type="password"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
+          autoComplete="current-password"
+          required
         />
       </label>
       <button type="submit" disabled={loading}>

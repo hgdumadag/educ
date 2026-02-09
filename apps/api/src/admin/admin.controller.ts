@@ -1,12 +1,15 @@
 import {
   Body,
   Controller,
+  DefaultValuePipe,
   Get,
   Header,
   Inject,
   Param,
   Patch,
   Post,
+  Query,
+  ParseIntPipe,
   UseGuards,
 } from "@nestjs/common";
 import { RoleKey } from "@prisma/client";
@@ -77,8 +80,11 @@ export class AdminController {
   }
 
   @Get("reports/attempts")
-  async attemptsReport() {
-    return this.adminService.getAttemptsReport();
+  async attemptsReport(
+    @Query("page", new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query("pageSize", new DefaultValuePipe(50), ParseIntPipe) pageSize: number,
+  ) {
+    return this.adminService.getAttemptsReport({ page, pageSize });
   }
 
   @Get("reports/export.csv")
@@ -88,7 +94,15 @@ export class AdminController {
   }
 
   @Get("audit-events")
-  async auditEvents() {
-    return this.adminService.getAuditEvents();
+  async auditEvents(
+    @Query("page", new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query("pageSize", new DefaultValuePipe(50), ParseIntPipe) pageSize: number,
+  ) {
+    return this.adminService.getAuditEvents({ page, pageSize });
+  }
+
+  @Get("metrics")
+  async metrics() {
+    return this.adminService.getOperationalMetrics();
   }
 }

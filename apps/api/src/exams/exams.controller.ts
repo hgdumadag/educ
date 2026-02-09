@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -19,10 +20,18 @@ import { JwtAuthGuard } from "../common/guards/jwt-auth.guard.js";
 import { RolesGuard } from "../common/guards/roles.guard.js";
 import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
 import type { UploadedFile as UploadedFileType } from "../common/types/upload-file.type.js";
+import { env } from "../env.js";
 import { CreateAssignmentDto } from "./dto/create-assignment.dto.js";
 import { CreateAttemptDto } from "./dto/create-attempt.dto.js";
 import { SaveResponsesDto } from "./dto/save-responses.dto.js";
 import { ExamsService } from "./exams.service.js";
+
+const JSON_CONTENT_TYPES = new Set([
+  "application/json",
+  "text/json",
+  "text/plain",
+  "application/octet-stream",
+]);
 
 @Controller()
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -31,7 +40,21 @@ export class ExamsController {
 
   @Post("exams/upload")
   @Roles(RoleKey.teacher, RoleKey.admin)
-  @UseInterceptors(FileInterceptor("file"))
+  @UseInterceptors(
+    FileInterceptor("file", {
+      limits: { fileSize: env.uploadMaxExamJsonBytes },
+      fileFilter: (_req, file, callback) => {
+        const isJsonName = file.originalname.toLowerCase().endsWith(".json");
+        const isJsonType = !file.mimetype || JSON_CONTENT_TYPES.has(file.mimetype.toLowerCase());
+        if (!isJsonName || !isJsonType) {
+          callback(new BadRequestException("Only JSON exam files are accepted"), false);
+          return;
+        }
+
+        callback(null, true);
+      },
+    }),
+  )
   async uploadExam(
     @CurrentUser() actor: AuthenticatedUser,
     @UploadedFile() file?: UploadedFileType,

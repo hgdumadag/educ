@@ -5,30 +5,40 @@ import { LoginForm } from "./components/LoginForm";
 import { AdminView } from "./pages/AdminView";
 import { StudentView } from "./pages/StudentView";
 import { TeacherView } from "./pages/TeacherView";
-import type { MeResponse, Session } from "./types";
+import type { MeResponse } from "./types";
 
 import "./styles.css";
 
-const SESSION_KEY = "educ_session";
-
-function readStoredSession(): Session | null {
-  const raw = localStorage.getItem(SESSION_KEY);
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(raw) as Session;
-  } catch {
-    return null;
-  }
-}
-
 export function App() {
-  const [session, setSession] = useState<Session | null>(() => readStoredSession());
   const [me, setMe] = useState<MeResponse | null>(null);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [bootstrapping, setBootstrapping] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function bootstrap() {
+      try {
+        const currentUser = await api.me();
+        if (mounted) {
+          setMe(currentUser);
+        }
+      } catch {
+        // User may not be logged in yet.
+      } finally {
+        if (mounted) {
+          setBootstrapping(false);
+        }
+      }
+    }
+
+    void bootstrap();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   async function handleLogin(identifier: string, password: string) {
     setLoading(true);
@@ -36,14 +46,7 @@ export function App() {
 
     try {
       const result = await api.login(identifier, password);
-      const stored: Session = {
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-      };
-
-      localStorage.setItem(SESSION_KEY, JSON.stringify(stored));
-      setSession(stored);
-      setMe(await api.me(stored.accessToken));
+      setMe(result.user);
     } catch (error) {
       setMessage(String(error));
     } finally {
@@ -52,38 +55,25 @@ export function App() {
   }
 
   async function handleLogout() {
-    if (session) {
-      try {
-        await api.logout(session.accessToken);
-      } catch {
-        // Ignore logout errors and clear local state regardless.
-      }
+    try {
+      await api.logout();
+    } catch {
+      // Ignore logout errors and clear local state regardless.
     }
 
-    localStorage.removeItem(SESSION_KEY);
-    setSession(null);
     setMe(null);
   }
 
-  async function refreshMe() {
-    if (!session) {
-      return;
-    }
-
-    try {
-      setMe(await api.me(session.accessToken));
-    } catch (error) {
-      setMessage(String(error));
-    }
+  if (bootstrapping) {
+    return (
+      <main className="app-shell">
+        <h1>Educ Platform</h1>
+        <p>Loading session...</p>
+      </main>
+    );
   }
 
-  useEffect(() => {
-    if (session && !me) {
-      void refreshMe();
-    }
-  }, [session, me]);
-
-  if (!session || !me) {
+  if (!me) {
     return (
       <main className="app-shell">
         <h1>Educ Platform</h1>
@@ -105,9 +95,9 @@ export function App() {
         <button onClick={handleLogout}>Sign out</button>
       </header>
 
-      {me.role === "admin" ? <AdminView accessToken={session.accessToken} /> : null}
-      {me.role === "teacher" ? <TeacherView accessToken={session.accessToken} /> : null}
-      {me.role === "student" ? <StudentView accessToken={session.accessToken} /> : null}
+      {me.role === "admin" ? <AdminView /> : null}
+      {me.role === "teacher" ? <TeacherView /> : null}
+      {me.role === "student" ? <StudentView /> : null}
 
       {message ? <p className="error">{message}</p> : null}
     </main>

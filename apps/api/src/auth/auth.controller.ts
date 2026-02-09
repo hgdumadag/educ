@@ -2,36 +2,74 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   Inject,
   Post,
+  Req,
+  Res,
+  UnauthorizedException,
   UseGuards,
 } from "@nestjs/common";
+import type { Request, Response } from "express";
 
+import {
+  REFRESH_TOKEN_COOKIE,
+  clearAuthCookies,
+  setAuthCookies,
+} from "./auth-cookies.js";
 import { CurrentUser } from "../common/decorators/current-user.decorator.js";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard.js";
 import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
 import { AuthService } from "./auth.service.js";
 import { LoginDto } from "./dto/login.dto.js";
-import { RefreshDto } from "./dto/refresh.dto.js";
 
 @Controller("auth")
 export class AuthController {
   constructor(@Inject(AuthService) private readonly authService: AuthService) {}
 
   @Post("login")
-  async login(@Body() dto: LoginDto) {
-    return this.authService.login(dto);
+  @HttpCode(200)
+  async login(
+    @Body() dto: LoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const session = await this.authService.login(
+      dto,
+      req.ip ?? req.socket.remoteAddress ?? "unknown",
+    );
+    setAuthCookies(res, session.accessToken, session.refreshToken);
+
+    return { user: session.user };
   }
 
   @Post("refresh")
-  async refresh(@Body() dto: RefreshDto) {
-    return this.authService.refresh(dto);
+  @HttpCode(200)
+  async refresh(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const refreshToken = req.cookies?.[REFRESH_TOKEN_COOKIE];
+    if (!refreshToken) {
+      throw new UnauthorizedException("Missing refresh token");
+    }
+
+    const session = await this.authService.refresh(refreshToken);
+    setAuthCookies(res, session.accessToken, session.refreshToken);
+
+    return { user: session.user };
   }
 
   @Post("logout")
-  @UseGuards(JwtAuthGuard)
-  async logout(@CurrentUser() user: AuthenticatedUser) {
-    return this.authService.logout(user.id);
+  @HttpCode(200)
+  async logout(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    await this.authService.logout({ refreshToken: req.cookies?.[REFRESH_TOKEN_COOKIE] });
+    clearAuthCookies(res);
+
+    return { ok: true };
   }
 
   @Get("me")

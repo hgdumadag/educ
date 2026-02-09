@@ -1,10 +1,5 @@
 export type RoleKey = "admin" | "teacher" | "student";
 
-export interface Session {
-  accessToken: string;
-  refreshToken: string;
-}
-
 export interface MeResponse {
   id: string;
   email: string;
@@ -18,6 +13,9 @@ export interface Assignment {
   examId?: string;
   lessonId?: string;
   dueAt?: string;
+  assignmentType: "practice" | "assessment";
+  maxAttempts: number;
+  attemptsUsed: number;
   exam?: {
     id: string;
     title: string;
