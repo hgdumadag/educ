@@ -52,6 +52,53 @@ body {
   flex-wrap: wrap;
 }
 
+.focus-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.focus-pill {
+  background: #eef3ff;
+  color: #1f2a44;
+  border: 1px solid #c7d2e5;
+  padding: 0.45rem 0.7rem;
+}
+
+.focus-pill:hover {
+  background: #e5edff;
+}
+
+.focus-pill.active {
+  border-color: #0d6efd;
+  box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.12);
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.65rem;
+}
+
+.summary-card {
+  background: #f8fbff;
+  border: 1px solid #d8e3f0;
+  border-radius: 8px;
+  padding: 0.7rem;
+}
+
+.summary-card h4 {
+  margin: 0 0 0.2rem;
+  font-size: 0.9rem;
+  color: #3d4c66;
+}
+
+.summary-card p {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
 label {
   display: flex;
   flex-direction: column;
@@ -241,6 +288,12 @@ button:hover {
 
 .checkbox-row.compact {
   font-size: 0.85rem;
+}
+
+.student-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0.75rem;
 }
 
 pre {

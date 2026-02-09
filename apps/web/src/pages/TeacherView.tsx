@@ -3,32 +3,52 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { ExamSummary, LessonSummary, SubjectRosterItem, SubjectSummary } from "../types";
 
-type TeacherTile = "students" | "upload" | "assignment";
+type TeacherFocus = "students" | "subjects" | "lessons" | "subject_assignments" | "exams";
 
-const TILE_CONTENT: Record<TeacherTile, { title: string; summary: string }> = {
-  students: {
-    title: "Subject Students",
-    summary: "Create/link students and control enrollment completion.",
+const FOCUS_ITEMS: Array<{ key: TeacherFocus; label: string; summary: string }> = [
+  {
+    key: "students",
+    label: "My Students",
+    summary: "View all students across subjects and manage enrollment.",
   },
-  upload: {
-    title: "Upload Content",
-    summary: "Upload lessons and exams under the selected subject.",
+  {
+    key: "subjects",
+    label: "My Subjects",
+    summary: "Create subjects and switch context quickly.",
   },
-  assignment: {
-    title: "Assign Content",
-    summary: "Assign specific lesson/exam items to selected students.",
+  {
+    key: "lessons",
+    label: "Lessons Per Subject",
+    summary: "Upload and review lessons under each subject.",
   },
-};
+  {
+    key: "subject_assignments",
+    label: "Students Assigned Per Subject",
+    summary: "Assign specific lessons or exams to students in the selected subject.",
+  },
+  {
+    key: "exams",
+    label: "Exams",
+    summary: "Upload exams and assign them as practice or assessment.",
+  },
+];
 
 interface TeacherViewProps {
   adminMode?: boolean;
   teacherScopeId?: string;
 }
 
+interface StudentOverview {
+  studentId: string;
+  email: string;
+  isActive: boolean;
+  subjects: Array<{ id: string; name: string; status: "active" | "completed" }>;
+}
+
 export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewProps) {
   const [subjects, setSubjects] = useState<SubjectSummary[]>([]);
   const [selectedSubjectId, setSelectedSubjectId] = useState("");
-  const [roster, setRoster] = useState<SubjectRosterItem[]>([]);
+  const [rosterBySubject, setRosterBySubject] = useState<Record<string, SubjectRosterItem[]>>({});
   const [lessons, setLessons] = useState<LessonSummary[]>([]);
   const [exams, setExams] = useState<ExamSummary[]>([]);
 
@@ -40,7 +60,7 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
   const [lessonFile, setLessonFile] = useState<File | null>(null);
   const [examFile, setExamFile] = useState<File | null>(null);
 
-  const [selectedTile, setSelectedTile] = useState<TeacherTile>("students");
+  const [activeFocus, setActiveFocus] = useState<TeacherFocus>("students");
   const [assignmentKind, setAssignmentKind] = useState<"lesson" | "exam">("exam");
   const [assignmentItemId, setAssignmentItemId] = useState("");
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
@@ -54,6 +74,11 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
     [subjects, selectedSubjectId],
   );
 
+  const selectedRoster = useMemo(
+    () => rosterBySubject[selectedSubjectId] ?? [],
+    [rosterBySubject, selectedSubjectId],
+  );
+
   const visibleLessons = useMemo(
     () => lessons.filter((lesson) => lesson.subject.id === selectedSubjectId),
     [lessons, selectedSubjectId],
@@ -64,12 +89,45 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
     [exams, selectedSubjectId],
   );
 
+  const allStudents = useMemo<StudentOverview[]>(() => {
+    const map = new Map<string, StudentOverview>();
+
+    for (const subject of subjects) {
+      const subjectRoster = rosterBySubject[subject.id] ?? [];
+      for (const enrollment of subjectRoster) {
+        const existing = map.get(enrollment.studentId);
+        const subjectInfo = {
+          id: subject.id,
+          name: subject.name,
+          status: enrollment.status,
+        };
+
+        if (!existing) {
+          map.set(enrollment.studentId, {
+            studentId: enrollment.studentId,
+            email: enrollment.student.email,
+            isActive: enrollment.student.isActive,
+            subjects: [subjectInfo],
+          });
+          continue;
+        }
+
+        if (!existing.subjects.some((item) => item.id === subject.id)) {
+          existing.subjects.push(subjectInfo);
+        }
+      }
+    }
+
+    return [...map.values()].sort((a, b) => a.email.localeCompare(b.email));
+  }, [subjects, rosterBySubject]);
+
   const assignmentItems = assignmentKind === "exam" ? visibleExams : visibleLessons;
 
   async function refreshSubjects() {
     if (adminMode && !teacherScopeId) {
       setSubjects([]);
       setSelectedSubjectId("");
+      setRosterBySubject({});
       return;
     }
 
@@ -88,6 +146,27 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
         }
         return data[0]?.id ?? "";
       });
+
+      if (data.length === 0) {
+        setRosterBySubject({});
+      }
+    } catch (error) {
+      setMessage(String(error));
+    }
+  }
+
+  async function refreshAllRosters(subjectList?: SubjectSummary[]) {
+    const targetSubjects = subjectList ?? subjects;
+    if (targetSubjects.length === 0) {
+      setRosterBySubject({});
+      return;
+    }
+
+    try {
+      const entries = await Promise.all(
+        targetSubjects.map(async (subject) => [subject.id, await api.listSubjectStudents(subject.id)] as const),
+      );
+      setRosterBySubject(Object.fromEntries(entries));
     } catch (error) {
       setMessage(String(error));
     }
@@ -109,35 +188,54 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
     }
   }
 
-  async function refreshRoster(subjectId: string) {
-    if (!subjectId) {
-      setRoster([]);
-      return;
-    }
-
-    try {
-      const data = await api.listSubjectStudents(subjectId);
-      setRoster(data);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  }
-
   useEffect(() => {
-    void refreshSubjects();
-    void refreshContent();
+    async function bootstrap() {
+      if (adminMode && !teacherScopeId) {
+        setSubjects([]);
+        setSelectedSubjectId("");
+        setRosterBySubject({});
+        setLessons([]);
+        setExams([]);
+        return;
+      }
+
+      try {
+        const subjectData = await api.listSubjects(
+          adminMode
+            ? {
+                teacherId: teacherScopeId,
+              }
+            : undefined,
+        );
+        setSubjects(subjectData);
+        setSelectedSubjectId((current) => {
+          if (current && subjectData.some((subject) => subject.id === current)) {
+            return current;
+          }
+          return subjectData[0]?.id ?? "";
+        });
+
+        const [lessonData, examData, rosterEntries] = await Promise.all([
+          api.listLessons(),
+          api.listExams(),
+          Promise.all(subjectData.map(async (subject) => [subject.id, await api.listSubjectStudents(subject.id)] as const)),
+        ]);
+
+        setLessons(lessonData);
+        setExams(examData);
+        setRosterBySubject(Object.fromEntries(rosterEntries));
+      } catch (error) {
+        setMessage(String(error));
+      }
+    }
+
+    void bootstrap();
   }, [adminMode, teacherScopeId]);
 
   useEffect(() => {
-    if (!selectedSubjectId) {
-      setRoster([]);
-      return;
-    }
-
-    void refreshRoster(selectedSubjectId);
     setAssignmentItemId("");
     setSelectedStudentIds([]);
-  }, [selectedSubjectId]);
+  }, [selectedSubjectId, assignmentKind]);
 
   async function handleCreateSubject(event: FormEvent) {
     event.preventDefault();
@@ -154,7 +252,17 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
       setNewSubjectName("");
       setMessage(`Subject created: ${created.name}`);
       await refreshSubjects();
+      await refreshContent();
+      const newSubjects = await api.listSubjects(
+        adminMode
+          ? {
+              teacherId: teacherScopeId,
+            }
+          : undefined,
+      );
+      setSubjects(newSubjects);
       setSelectedSubjectId(created.id);
+      await refreshAllRosters(newSubjects);
     } catch (error) {
       setMessage(String(error));
     }
@@ -183,7 +291,7 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
       setEnrollPassword("");
       setEnrollAutoAssignFuture(true);
       setMessage("Student enrolled to subject.");
-      await refreshRoster(selectedSubjectId);
+      await refreshAllRosters();
     } catch (error) {
       setMessage(String(error));
     }
@@ -197,7 +305,7 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
     try {
       await api.updateSubjectStudent(selectedSubjectId, studentId, { status });
       setMessage(status === "completed" ? "Enrollment marked completed." : "Enrollment reactivated.");
-      await refreshRoster(selectedSubjectId);
+      await refreshAllRosters();
     } catch (error) {
       setMessage(String(error));
     }
@@ -211,7 +319,7 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
     try {
       await api.updateSubjectStudent(selectedSubjectId, studentId, { autoAssignFuture });
       setMessage("Enrollment updated.");
-      await refreshRoster(selectedSubjectId);
+      await refreshAllRosters();
     } catch (error) {
       setMessage(String(error));
     }
@@ -302,80 +410,129 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
     return (
       <section className="panel">
         <h3>Teacher Scope Required</h3>
-        <p className="muted">Select a teacher to manage subjects, students, uploads, and assignments.</p>
+        <p className="muted">Select a teacher to manage subjects, students, lessons, exams, and assignments.</p>
       </section>
     );
   }
 
   return (
     <div className="stack">
-      <section className="panel">
-        <h3>Subjects</h3>
-        <p className="muted">
-          Create subjects for this teacher, then manage students and content inside each subject.
-        </p>
-        <form onSubmit={handleCreateSubject} className="row-wrap">
-          <input
-            value={newSubjectName}
-            onChange={(event) => setNewSubjectName(event.target.value)}
-            placeholder="e.g. Grade 7 Mathematics"
-          />
-          <button type="submit">Create Subject</button>
-        </form>
-        {subjects.length === 0 ? (
-          <p className="muted">No subjects yet.</p>
-        ) : (
-          <div className="tile-grid">
+      <section className="panel stack">
+        <h3>Teacher Workspace</h3>
+        <p className="muted">Navigate by your top priorities and manage relationships from one screen.</p>
+        <div className="focus-nav">
+          {FOCUS_ITEMS.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              className={`focus-pill ${activeFocus === item.key ? "active" : ""}`}
+              onClick={() => setActiveFocus(item.key)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel stack">
+        <div className="row-wrap">
+          <h3>Current Subject</h3>
+          <select
+            value={selectedSubjectId}
+            onChange={(event) => setSelectedSubjectId(event.target.value)}
+          >
+            <option value="">Select subject</option>
             {subjects.map((subject) => (
-              <button
-                type="button"
-                key={subject.id}
-                className={`tile-card ${subject.id === selectedSubjectId ? "active" : ""}`}
-                onClick={() => setSelectedSubjectId(subject.id)}
-              >
-                <h3>{subject.name}</h3>
-                <p>
-                  Lessons: {subject._count?.lessons ?? 0} | Exams: {subject._count?.exams ?? 0}
-                </p>
-                <span className="tile-cta">
-                  {subject.id === selectedSubjectId ? "Selected" : "Open subject"}
-                </span>
-              </button>
+              <option key={subject.id} value={subject.id}>
+                {subject.name}
+              </option>
             ))}
+          </select>
+        </div>
+        {selectedSubject ? (
+          <div className="summary-grid">
+            <article className="summary-card">
+              <h4>Students in Subject</h4>
+              <p>{selectedRoster.length}</p>
+            </article>
+            <article className="summary-card">
+              <h4>Lessons</h4>
+              <p>{visibleLessons.length}</p>
+            </article>
+            <article className="summary-card">
+              <h4>Exams</h4>
+              <p>{visibleExams.length}</p>
+            </article>
           </div>
+        ) : (
+          <p className="muted">Select a subject to see related students, lessons, exams, and assignments.</p>
         )}
       </section>
 
-      {selectedSubject ? (
-        <section className="panel">
-          <h3>Selected Subject: {selectedSubject.name}</h3>
-          <p className="muted">Teacher owner: {selectedSubject.teacherOwner?.email ?? selectedSubject.teacherOwnerId}</p>
+      {activeFocus === "subjects" ? (
+        <section className="panel stack">
+          <h3>My Subjects</h3>
+          <p className="muted">Create and organize subjects you manage.</p>
+          <form onSubmit={handleCreateSubject} className="row-wrap">
+            <input
+              value={newSubjectName}
+              onChange={(event) => setNewSubjectName(event.target.value)}
+              placeholder="e.g. Grade 7 Mathematics"
+            />
+            <button type="submit">Create Subject</button>
+          </form>
+          {subjects.length === 0 ? (
+            <p className="muted">No subjects yet.</p>
+          ) : (
+            <div className="tile-grid">
+              {subjects.map((subject) => (
+                <button
+                  type="button"
+                  key={subject.id}
+                  className={`tile-card ${subject.id === selectedSubjectId ? "active" : ""}`}
+                  onClick={() => setSelectedSubjectId(subject.id)}
+                >
+                  <h3>{subject.name}</h3>
+                  <p>
+                    Students: {(rosterBySubject[subject.id] ?? []).length} | Lessons: {lessons.filter((lesson) => lesson.subject.id === subject.id).length} | Exams: {exams.filter((exam) => exam.subject.id === subject.id).length}
+                  </p>
+                  <span className="tile-cta">
+                    {subject.id === selectedSubjectId ? "Selected" : "Switch to this subject"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </section>
       ) : null}
 
-      <section className="tile-grid">
-        {(Object.keys(TILE_CONTENT) as TeacherTile[]).map((tile) => (
-          <button
-            key={tile}
-            type="button"
-            className={`tile-card ${selectedTile === tile ? "active" : ""}`}
-            onClick={() => setSelectedTile(tile)}
-          >
-            <h3>{TILE_CONTENT[tile].title}</h3>
-            <p>{TILE_CONTENT[tile].summary}</p>
-            <span className="tile-cta">
-              {selectedTile === tile ? "Viewing details below" : "Click to view details"}
-            </span>
-          </button>
-        ))}
-      </section>
-
-      {selectedTile === "students" ? (
+      {activeFocus === "students" ? (
         <section className="panel stack">
-          <h3>Enroll or Link Student</h3>
-          <p className="muted">
-            Enter student email. If account exists, it is linked to this subject. If not, a new student account is created.
-          </p>
+          <h3>My Students</h3>
+          <p className="muted">All students across your subjects, plus enrollment controls for the selected subject.</p>
+
+          <div className="student-overview-grid">
+            {allStudents.length === 0 ? (
+              <p className="muted">No enrolled students yet.</p>
+            ) : (
+              allStudents.map((student) => (
+                <article key={student.studentId} className="assignment-card">
+                  <div className="assignment-head">
+                    <h4>{student.email}</h4>
+                    <span className={`badge ${student.isActive ? "practice" : "assessment"}`}>
+                      {student.isActive ? "active" : "inactive"}
+                    </span>
+                  </div>
+                  <p className="assignment-meta">Student ID: {student.studentId}</p>
+                  <p className="assignment-meta">
+                    Subjects: {student.subjects.map((subject) => `${subject.name} (${subject.status})`).join(", ")}
+                  </p>
+                </article>
+              ))
+            )}
+          </div>
+
+          <h4>Enroll Student Into Selected Subject</h4>
           <form onSubmit={handleEnrollStudent} className="stack">
             <label>
               Student Email
@@ -407,12 +564,12 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
             <button type="submit" disabled={!selectedSubjectId}>Enroll Student</button>
           </form>
 
-          <h4>Subject Roster</h4>
-          {roster.length === 0 ? (
-            <p className="muted">No students enrolled yet.</p>
+          <h4>Students Assigned Per Subject ({selectedSubject?.name ?? "No subject selected"})</h4>
+          {selectedRoster.length === 0 ? (
+            <p className="muted">No students enrolled in selected subject.</p>
           ) : (
             <div className="assignment-grid">
-              {roster.map((item) => (
+              {selectedRoster.map((item) => (
                 <article className="assignment-card" key={item.id}>
                   <div className="assignment-head">
                     <h4>{item.student.email}</h4>
@@ -447,15 +604,10 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
         </section>
       ) : null}
 
-      {selectedTile === "upload" ? (
+      {activeFocus === "lessons" ? (
         <section className="panel stack">
-          <h3>Upload Content Under Subject</h3>
-          <p className="muted">All uploads here are attached to the selected subject and can auto-assign to active enrollments.</p>
-          <div className="row-wrap">
-            <span className="muted">Lessons in subject: {visibleLessons.length}</span>
-            <span className="muted">Exams in subject: {visibleExams.length}</span>
-          </div>
-
+          <h3>Lessons Per Subject</h3>
+          <p className="muted">Upload new lessons and review all lessons under the selected subject.</p>
           <form onSubmit={handleLessonUpload} className="stack">
             <label>
               Lesson ZIP
@@ -468,6 +620,28 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
             <button type="submit" disabled={!selectedSubjectId}>Upload Lesson</button>
           </form>
 
+          {visibleLessons.length === 0 ? (
+            <p className="muted">No lessons under selected subject yet.</p>
+          ) : (
+            <div className="assignment-grid">
+              {visibleLessons.map((lesson) => (
+                <article key={lesson.id} className="assignment-card">
+                  <h4>{lesson.title}</h4>
+                  <p className="assignment-meta">Subject: {lesson.subject.name}</p>
+                  <p className="assignment-meta">Lesson ID: {lesson.id}</p>
+                  <p className="assignment-meta">Grade Level: {lesson.gradeLevel ?? "n/a"}</p>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {activeFocus === "exams" ? (
+        <section className="panel stack">
+          <h3>Exams (Practice or Assessment)</h3>
+          <p className="muted">Upload exams for selected subject. Use assignment section to assign as practice or assessment.</p>
+
           <form onSubmit={handleExamUpload} className="stack">
             <label>
               Exam JSON
@@ -479,25 +653,33 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
             </label>
             <button type="submit" disabled={!selectedSubjectId}>Upload Exam</button>
           </form>
+
+          {visibleExams.length === 0 ? (
+            <p className="muted">No exams under selected subject yet.</p>
+          ) : (
+            <div className="assignment-grid">
+              {visibleExams.map((exam) => (
+                <article key={exam.id} className="assignment-card">
+                  <h4>{exam.title}</h4>
+                  <p className="assignment-meta">Subject: {exam.subject.name}</p>
+                  <p className="assignment-meta">Exam ID: {exam.id}</p>
+                </article>
+              ))}
+            </div>
+          )}
         </section>
       ) : null}
 
-      {selectedTile === "assignment" ? (
+      {activeFocus === "subject_assignments" ? (
         <section className="panel stack">
-          <h3>Assign Specific Content</h3>
-          <p className="muted">
-            Use this for targeted assignment. Whole-subject assignment is handled through enrollment with auto-assign.
-          </p>
+          <h3>Students Assigned Per Subject</h3>
+          <p className="muted">Assign one selected lesson/exam to selected students in this subject.</p>
           <form onSubmit={handleManualAssignment} className="stack">
             <label>
               Content Type
               <select
                 value={assignmentKind}
-                onChange={(event) => {
-                  const value = event.target.value as "lesson" | "exam";
-                  setAssignmentKind(value);
-                  setAssignmentItemId("");
-                }}
+                onChange={(event) => setAssignmentKind(event.target.value as "lesson" | "exam")}
               >
                 <option value="exam">exam</option>
                 <option value="lesson">lesson</option>
@@ -517,12 +699,12 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
             </label>
 
             <div className="stack">
-              <p className="muted">Students</p>
-              {roster.length === 0 ? (
+              <p className="muted">Students in selected subject</p>
+              {selectedRoster.length === 0 ? (
                 <p className="muted">No enrolled students in this subject yet.</p>
               ) : (
                 <div className="checkbox-grid">
-                  {roster.map((item) => (
+                  {selectedRoster.map((item) => (
                     <label key={item.studentId} className="checkbox-row">
                       <input
                         type="checkbox"
@@ -561,7 +743,7 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
             </label>
 
             <p className="muted">
-              Manual defaults: practice = 3 attempts, assessment = 1 attempt (unless overridden).
+              Defaults: practice = 3 attempts, assessment = 1 attempt (unless overridden).
             </p>
 
             <button type="submit" disabled={!selectedSubjectId}>Assign Selected Content</button>
