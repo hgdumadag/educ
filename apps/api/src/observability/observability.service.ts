@@ -23,6 +23,7 @@ export class ObservabilityService {
     totalLatencyMs: 0,
     maxLatencyMs: 0,
   };
+  private readonly counters = new Map<string, number>();
 
   recordHttpRequest(args: {
     method: string;
@@ -57,6 +58,11 @@ export class ObservabilityService {
     this.openAiMetrics.maxLatencyMs = Math.max(this.openAiMetrics.maxLatencyMs, args.latencyMs);
   }
 
+  incrementCounter(name: string, amount = 1): void {
+    const current = this.counters.get(name) ?? 0;
+    this.counters.set(name, current + amount);
+  }
+
   snapshot() {
     const http = [...this.httpMetrics.entries()]
       .map(([routeKey, bucket]) => ({
@@ -83,6 +89,7 @@ export class ObservabilityService {
             : 0,
         maxLatencyMs: Number(this.openAiMetrics.maxLatencyMs.toFixed(2)),
       },
+      counters: Object.fromEntries(this.counters.entries()),
     };
   }
 }

@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { RoleKey } from "@prisma/client";
 
 import { ObservabilityService } from "../observability/observability.service.js";
@@ -55,6 +55,32 @@ export class AdminService {
     });
 
     return user;
+  }
+
+  async listUsers(args: { role?: RoleKey }) {
+    const where = (() => {
+      if (!args.role) {
+        return undefined;
+      }
+
+      if (!Object.values(RoleKey).includes(args.role)) {
+        throw new BadRequestException("Invalid role filter");
+      }
+
+      return { role: args.role };
+    })();
+
+    return this.prisma.user.findMany({
+      where,
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
   }
 
   async updateUser(actor: AuthenticatedUser, userId: string, dto: UpdateUserDto) {

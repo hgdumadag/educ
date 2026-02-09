@@ -39,6 +39,11 @@ export class AdminController {
     return this.adminService.createUser(actor, dto);
   }
 
+  @Get("users")
+  async listUsers(@Query("role") role?: RoleKey) {
+    return this.adminService.listUsers({ role });
+  }
+
   @Patch("users/:userId")
   async updateUser(
     @CurrentUser() actor: AuthenticatedUser,

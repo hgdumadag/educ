@@ -8,6 +8,7 @@ import { ObservabilityModule } from "./observability/observability.module.js";
 import { OpenAiModule } from "./openai/openai.module.js";
 import { PrismaModule } from "./prisma/prisma.module.js";
 import { RedisModule } from "./redis/redis.module.js";
+import { SubjectsModule } from "./subjects/subjects.module.js";
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { RedisModule } from "./redis/redis.module.js";
     OpenAiModule,
     AuthModule,
     AdminModule,
+    SubjectsModule,
     LessonsModule,
     ExamsModule,
   ],

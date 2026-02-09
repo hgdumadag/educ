@@ -5,13 +5,14 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import type { Prisma } from "@prisma/client";
+import { Prisma, RoleKey } from "@prisma/client";
 import AdmZip from "adm-zip";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { env } from "../env.js";
 import { PrismaService } from "../prisma/prisma.service.js";
+import { SubjectsService } from "../subjects/subjects.service.js";
 import { recordAuditEvent } from "../utils/audit.js";
 import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
 import type { UploadedFile } from "../common/types/upload-file.type.js";
@@ -25,7 +26,10 @@ interface LessonUploadResult {
 
 @Injectable()
 export class LessonsService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(SubjectsService) private readonly subjectsService: SubjectsService,
+  ) {}
 
   private async persistFile(file: UploadedFile): Promise<string> {
     const directory = path.join(env.uploadLocalPath, "lessons");
@@ -38,13 +42,61 @@ export class LessonsService {
     return fullPath;
   }
 
+  private toSubject(subject: { id: string; name: string; teacherOwnerId: string }) {
+    return {
+      id: subject.id,
+      name: subject.name,
+      teacherOwnerId: subject.teacherOwnerId,
+    };
+  }
+
+  private toLessonResponse(lesson: {
+    id: string;
+    title: string;
+    gradeLevel: string | null;
+    subject: string;
+    subjectId: string;
+    contentPath: string;
+    metadataJson: unknown;
+    uploadedById: string;
+    isDeleted: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+    subjectRef: {
+      id: string;
+      name: string;
+      teacherOwnerId: string;
+    };
+  }) {
+    return {
+      id: lesson.id,
+      title: lesson.title,
+      gradeLevel: lesson.gradeLevel,
+      subjectId: lesson.subjectId,
+      subject: this.toSubject(lesson.subjectRef),
+      contentPath: lesson.contentPath,
+      metadataJson: lesson.metadataJson,
+      uploadedById: lesson.uploadedById,
+      isDeleted: lesson.isDeleted,
+      createdAt: lesson.createdAt,
+      updatedAt: lesson.updatedAt,
+    };
+  }
+
   async uploadLesson(
     actor: AuthenticatedUser,
+    subjectId: string,
     file?: UploadedFile,
   ): Promise<LessonUploadResult> {
     if (!file) {
       throw new BadRequestException("Missing upload file");
     }
+
+    if (!subjectId || !subjectId.trim()) {
+      throw new BadRequestException("subjectId is required");
+    }
+
+    const subject = await this.subjectsService.assertSubjectAccess(actor, subjectId.trim());
 
     const errors: string[] = [];
     const warnings: string[] = [];
@@ -77,10 +129,6 @@ export class LessonsService {
       typeof metadata.title === "string" && metadata.title.trim()
         ? metadata.title.trim()
         : "Untitled Lesson";
-    const subject =
-      typeof metadata.subject === "string" && metadata.subject.trim()
-        ? metadata.subject.trim()
-        : "General";
     const gradeLevel =
       typeof metadata.gradeLevel === "string" && metadata.gradeLevel.trim()
         ? metadata.gradeLevel.trim()
@@ -95,19 +143,28 @@ export class LessonsService {
     const lesson = await this.prisma.lesson.create({
       data: {
         title,
-        subject,
+        subject: subject.name,
+        subjectId: subject.id,
         gradeLevel,
         contentPath,
-        metadataJson: metadata as Prisma.JsonObject,
+        metadataJson: metadata as Prisma.InputJsonValue,
         uploadedById: actor.id,
       },
-      select: {
-        id: true,
-        title: true,
-        subject: true,
-        gradeLevel: true,
-        createdAt: true,
+      include: {
+        subjectRef: {
+          select: {
+            id: true,
+            name: true,
+            teacherOwnerId: true,
+          },
+        },
       },
+    });
+
+    await this.subjectsService.autoAssignNewContent({
+      actorUserId: actor.id,
+      subjectId: lesson.subjectId,
+      lessonId: lesson.id,
     });
 
     await recordAuditEvent(this.prisma, {
@@ -115,27 +172,55 @@ export class LessonsService {
       action: "lesson.upload",
       entityType: "lesson",
       entityId: lesson.id,
-      metadataJson: { title: lesson.title },
+      metadataJson: { title: lesson.title, subjectId: lesson.subjectId },
     });
 
     return {
       valid: true,
       errors,
       warnings,
-      normalizedPreview: lesson,
+      normalizedPreview: this.toLessonResponse(lesson),
     };
   }
 
   async listLessons(actor: AuthenticatedUser) {
-    if (actor.role === "admin") {
-      return this.prisma.lesson.findMany({ where: { isDeleted: false }, orderBy: { createdAt: "desc" } });
-    }
-
-    if (actor.role === "teacher") {
-      return this.prisma.lesson.findMany({
-        where: { isDeleted: false, uploadedById: actor.id },
+    if (actor.role === RoleKey.admin) {
+      const lessons = await this.prisma.lesson.findMany({
+        where: { isDeleted: false },
+        include: {
+          subjectRef: {
+            select: {
+              id: true,
+              name: true,
+              teacherOwnerId: true,
+            },
+          },
+        },
         orderBy: { createdAt: "desc" },
       });
+      return lessons.map((lesson) => this.toLessonResponse(lesson));
+    }
+
+    if (actor.role === RoleKey.teacher) {
+      const lessons = await this.prisma.lesson.findMany({
+        where: {
+          isDeleted: false,
+          subjectRef: {
+            teacherOwnerId: actor.id,
+          },
+        },
+        include: {
+          subjectRef: {
+            select: {
+              id: true,
+              name: true,
+              teacherOwnerId: true,
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      return lessons.map((lesson) => this.toLessonResponse(lesson));
     }
 
     const assignments = await this.prisma.assignment.findMany({
@@ -143,14 +228,26 @@ export class LessonsService {
         assigneeStudentId: actor.id,
         lessonId: { not: null },
       },
-      include: { lesson: true },
+      include: {
+        lesson: {
+          include: {
+            subjectRef: {
+              select: {
+                id: true,
+                name: true,
+                teacherOwnerId: true,
+              },
+            },
+          },
+        },
+      },
       orderBy: { createdAt: "desc" },
     });
 
-    const unique = new Map<string, unknown>();
+    const unique = new Map<string, ReturnType<LessonsService["toLessonResponse"]>>();
     for (const assignment of assignments) {
       if (assignment.lesson && !assignment.lesson.isDeleted) {
-        unique.set(assignment.lesson.id, assignment.lesson);
+        unique.set(assignment.lesson.id, this.toLessonResponse(assignment.lesson));
       }
     }
 
@@ -158,16 +255,27 @@ export class LessonsService {
   }
 
   async getLesson(actor: AuthenticatedUser, lessonId: string) {
-    const lesson = await this.prisma.lesson.findUnique({ where: { id: lessonId } });
+    const lesson = await this.prisma.lesson.findUnique({
+      where: { id: lessonId },
+      include: {
+        subjectRef: {
+          select: {
+            id: true,
+            name: true,
+            teacherOwnerId: true,
+          },
+        },
+      },
+    });
     if (!lesson || lesson.isDeleted) {
       throw new NotFoundException("Lesson not found");
     }
 
-    if (actor.role === "teacher" && lesson.uploadedById !== actor.id) {
+    if (actor.role === RoleKey.teacher && lesson.subjectRef.teacherOwnerId !== actor.id) {
       throw new ForbiddenException("Teachers can only access owned lessons");
     }
 
-    if (actor.role === "student") {
+    if (actor.role === RoleKey.student) {
       const assignment = await this.prisma.assignment.findFirst({
         where: {
           assigneeStudentId: actor.id,
@@ -180,16 +288,25 @@ export class LessonsService {
       }
     }
 
-    return lesson;
+    return this.toLessonResponse(lesson);
   }
 
   async softDelete(actor: AuthenticatedUser, lessonId: string): Promise<{ ok: true }> {
-    const lesson = await this.prisma.lesson.findUnique({ where: { id: lessonId } });
+    const lesson = await this.prisma.lesson.findUnique({
+      where: { id: lessonId },
+      include: {
+        subjectRef: {
+          select: {
+            teacherOwnerId: true,
+          },
+        },
+      },
+    });
     if (!lesson || lesson.isDeleted) {
       throw new NotFoundException("Lesson not found");
     }
 
-    const ownerOrAdmin = actor.role === "admin" || lesson.uploadedById === actor.id;
+    const ownerOrAdmin = actor.role === RoleKey.admin || lesson.subjectRef.teacherOwnerId === actor.id;
     if (!ownerOrAdmin) {
       throw new ForbiddenException("Only owner or admin can delete this lesson");
     }
@@ -201,6 +318,9 @@ export class LessonsService {
       action: "lesson.delete",
       entityType: "lesson",
       entityId: lessonId,
+      metadataJson: {
+        subjectId: lesson.subjectId,
+      },
     });
 
     return { ok: true };

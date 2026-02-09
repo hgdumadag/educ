@@ -3,8 +3,15 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { Assignment, ExamDetails } from "../types";
 
+interface SubjectGroup {
+  subjectId: string;
+  subjectName: string;
+  count: number;
+}
+
 export function StudentView() {
   const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [selectedSubjectId, setSelectedSubjectId] = useState("");
   const [selectedExam, setSelectedExam] = useState<ExamDetails | null>(null);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
   const [selectedAssignmentExamId, setSelectedAssignmentExamId] = useState("");
@@ -23,17 +30,61 @@ export function StudentView() {
   }
 
   useEffect(() => {
-    refreshAssignments();
+    void refreshAssignments();
   }, []);
+
+  const subjectGroups = useMemo<SubjectGroup[]>(() => {
+    const map = new Map<string, SubjectGroup>();
+    for (const assignment of assignments) {
+      const subjectId = assignment.subject?.id ?? "unknown";
+      const subjectName = assignment.subject?.name ?? "Ungrouped";
+      const existing = map.get(subjectId);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        map.set(subjectId, {
+          subjectId,
+          subjectName,
+          count: 1,
+        });
+      }
+    }
+
+    return [...map.values()];
+  }, [assignments]);
+
+  useEffect(() => {
+    if (subjectGroups.length === 0) {
+      setSelectedSubjectId("");
+      return;
+    }
+
+    setSelectedSubjectId((current) => {
+      if (current && subjectGroups.some((group) => group.subjectId === current)) {
+        return current;
+      }
+      return subjectGroups[0].subjectId;
+    });
+  }, [subjectGroups]);
 
   const examAssignments = useMemo(
     () => assignments.filter((assignment) => assignment.examId && assignment.exam),
     [assignments],
   );
-  const selectedAssignment = useMemo(
-    () => examAssignments.find((assignment) => assignment.id === selectedAssignmentId) ?? null,
-    [examAssignments, selectedAssignmentId],
+
+  const visibleExamAssignments = useMemo(
+    () =>
+      selectedSubjectId
+        ? examAssignments.filter((assignment) => (assignment.subject?.id ?? "unknown") === selectedSubjectId)
+        : examAssignments,
+    [examAssignments, selectedSubjectId],
   );
+
+  const selectedAssignment = useMemo(
+    () => visibleExamAssignments.find((assignment) => assignment.id === selectedAssignmentId) ?? null,
+    [visibleExamAssignments, selectedAssignmentId],
+  );
+
   const answeredCount = useMemo(() => {
     if (!selectedExam) {
       return 0;
@@ -101,6 +152,7 @@ export function StudentView() {
       const details = await api.attemptResult(attemptId);
       setResult(details);
       setMessage("Attempt submitted.");
+      await refreshAssignments();
     } catch (error) {
       setMessage(String(error));
     }
@@ -109,15 +161,40 @@ export function StudentView() {
   return (
     <div className="stack">
       <section className="panel">
+        <h3>Subjects</h3>
+        <p className="muted">Choose a subject to view assigned exams and continue attempts.</p>
+        {subjectGroups.length === 0 ? (
+          <p className="muted">No assigned content yet. Contact your teacher if you expected one.</p>
+        ) : (
+          <div className="tile-grid">
+            {subjectGroups.map((group) => (
+              <button
+                key={group.subjectId}
+                type="button"
+                className={`tile-card ${group.subjectId === selectedSubjectId ? "active" : ""}`}
+                onClick={() => setSelectedSubjectId(group.subjectId)}
+              >
+                <h3>{group.subjectName}</h3>
+                <p>{group.count} assignment(s)</p>
+                <span className="tile-cta">
+                  {group.subjectId === selectedSubjectId ? "Viewing assignments below" : "Open subject"}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
         <h3>Assigned Exams</h3>
         <p className="muted">
           Pick an exam below, start an attempt, save responses during work, then submit when finished.
         </p>
-        {examAssignments.length === 0 ? (
-          <p className="muted">No assigned exams yet. Contact your teacher if you expected one.</p>
+        {visibleExamAssignments.length === 0 ? (
+          <p className="muted">No assigned exams in this subject yet.</p>
         ) : null}
         <div className="assignment-grid">
-          {examAssignments.map((assignment) => {
+          {visibleExamAssignments.map((assignment) => {
             const isActive = assignment.id === selectedAssignmentId;
             const remainingAttempts = Math.max(assignment.maxAttempts - assignment.attemptsUsed, 0);
 
@@ -134,7 +211,8 @@ export function StudentView() {
                     {assignment.assignmentType}
                   </span>
                 </div>
-                <p className="muted">{assignment.exam?.subject}</p>
+                <p className="muted">Source: {assignment.assignmentSource === "subject_auto" ? "Subject auto" : "Manual"}</p>
+                <p className="muted">Subject enrollment: {assignment.subjectEnrollmentStatus ?? "n/a"}</p>
                 <p className="assignment-meta">
                   Attempts used: {assignment.attemptsUsed}/{assignment.maxAttempts}
                 </p>
@@ -151,7 +229,7 @@ export function StudentView() {
           <div className="row">
             <div>
               <h3>{selectedExam.title}</h3>
-              <p className="muted">{selectedExam.subject}</p>
+              <p className="muted">{selectedExam.subject.name}</p>
               <p className="muted">Assignment ID: {selectedAssignmentId}</p>
               <p className="muted">Exam ID: {selectedAssignmentExamId}</p>
             </div>

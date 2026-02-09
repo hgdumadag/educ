@@ -13,6 +13,7 @@ import path from "node:path";
 
 import { OpenAiService } from "../openai/openai.service.js";
 import { PrismaService } from "../prisma/prisma.service.js";
+import { SubjectsService } from "../subjects/subjects.service.js";
 import { recordAuditEvent } from "../utils/audit.js";
 import { env } from "../env.js";
 import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
@@ -29,11 +30,18 @@ interface ValidationResult {
   normalizedPreview: unknown | null;
 }
 
+interface SubjectShape {
+  id: string;
+  name: string;
+  teacherOwnerId: string;
+}
+
 @Injectable()
 export class ExamsService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(OpenAiService) private readonly openAiService: OpenAiService,
+    @Inject(SubjectsService) private readonly subjectsService: SubjectsService,
   ) {}
 
   private async persistFile(file: UploadedFile): Promise<string> {
@@ -47,32 +55,107 @@ export class ExamsService {
     return fullPath;
   }
 
-  private assertTeacherOwnership(actor: AuthenticatedUser, lessonId?: string, examId?: string): Promise<void> {
-    if (actor.role === RoleKey.admin) {
-      return Promise.resolve();
-    }
-
-    return (async () => {
-      if (lessonId) {
-        const lesson = await this.prisma.lesson.findUnique({ where: { id: lessonId } });
-        if (!lesson || lesson.uploadedById !== actor.id || lesson.isDeleted) {
-          throw new ForbiddenException("Teacher does not own lesson");
-        }
-      }
-
-      if (examId) {
-        const exam = await this.prisma.exam.findUnique({ where: { id: examId } });
-        if (!exam || exam.uploadedById !== actor.id || exam.isDeleted) {
-          throw new ForbiddenException("Teacher does not own exam");
-        }
-      }
-    })();
+  private toSubject(subject: SubjectShape) {
+    return {
+      id: subject.id,
+      name: subject.name,
+      teacherOwnerId: subject.teacherOwnerId,
+    };
   }
 
-  async uploadExam(actor: AuthenticatedUser, file?: UploadedFile): Promise<ValidationResult> {
+  private toExamSummary(exam: {
+    id: string;
+    title: string;
+    subjectId: string;
+    subjectRef: SubjectShape;
+    isDeleted: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+  }) {
+    return {
+      id: exam.id,
+      title: exam.title,
+      subjectId: exam.subjectId,
+      subject: this.toSubject(exam.subjectRef),
+      isDeleted: exam.isDeleted,
+      createdAt: exam.createdAt,
+      updatedAt: exam.updatedAt,
+    };
+  }
+
+  private async resolveAssignmentTarget(
+    actor: AuthenticatedUser,
+    dto: CreateAssignmentDto,
+  ): Promise<{ subject: SubjectShape; lessonId?: string; examId?: string }> {
+    if (dto.lessonId && dto.examId) {
+      throw new BadRequestException("Assignment must reference exactly one of lessonId or examId");
+    }
+
+    if (!dto.lessonId && !dto.examId) {
+      throw new BadRequestException("Assignment must reference lessonId or examId");
+    }
+
+    if (dto.lessonId) {
+      const lesson = await this.prisma.lesson.findUnique({
+        where: { id: dto.lessonId },
+        include: {
+          subjectRef: {
+            select: {
+              id: true,
+              name: true,
+              teacherOwnerId: true,
+            },
+          },
+        },
+      });
+
+      if (!lesson || lesson.isDeleted) {
+        throw new NotFoundException("Lesson not found");
+      }
+
+      await this.subjectsService.assertSubjectAccess(actor, lesson.subjectId);
+
+      return {
+        subject: lesson.subjectRef,
+        lessonId: lesson.id,
+      };
+    }
+
+    const exam = await this.prisma.exam.findUnique({
+      where: { id: dto.examId },
+      include: {
+        subjectRef: {
+          select: {
+            id: true,
+            name: true,
+            teacherOwnerId: true,
+          },
+        },
+      },
+    });
+
+    if (!exam || exam.isDeleted) {
+      throw new NotFoundException("Exam not found");
+    }
+
+    await this.subjectsService.assertSubjectAccess(actor, exam.subjectId);
+
+    return {
+      subject: exam.subjectRef,
+      examId: exam.id,
+    };
+  }
+
+  async uploadExam(actor: AuthenticatedUser, subjectId: string, file?: UploadedFile): Promise<ValidationResult> {
     if (!file) {
       throw new BadRequestException("Missing upload file");
     }
+
+    if (!subjectId || !subjectId.trim()) {
+      throw new BadRequestException("subjectId is required");
+    }
+
+    const subject = await this.subjectsService.assertSubjectAccess(actor, subjectId.trim());
 
     const errors: string[] = [];
     const warnings: string[] = [];
@@ -105,7 +188,8 @@ export class ExamsService {
     const exam = await this.prisma.exam.create({
       data: {
         title: normalized.normalized.title,
-        subject: normalized.normalized.subject,
+        subject: subject.name,
+        subjectId: subject.id,
         settingsJson: normalized.normalized.settings,
         normalizedJson: {
           ...normalized.normalized,
@@ -114,13 +198,21 @@ export class ExamsService {
         normalizedSchemaVersion: "v1",
         uploadedById: actor.id,
       },
-      select: {
-        id: true,
-        title: true,
-        subject: true,
-        normalizedSchemaVersion: true,
-        createdAt: true,
+      include: {
+        subjectRef: {
+          select: {
+            id: true,
+            name: true,
+            teacherOwnerId: true,
+          },
+        },
       },
+    });
+
+    await this.subjectsService.autoAssignNewContent({
+      actorUserId: actor.id,
+      subjectId: exam.subjectId,
+      examId: exam.id,
     });
 
     await recordAuditEvent(this.prisma, {
@@ -130,6 +222,7 @@ export class ExamsService {
       entityId: exam.id,
       metadataJson: {
         title: exam.title,
+        subjectId: exam.subjectId,
       },
     });
 
@@ -138,7 +231,7 @@ export class ExamsService {
       errors,
       warnings: [...warnings, ...normalized.warnings],
       normalizedPreview: {
-        ...exam,
+        ...this.toExamSummary(exam),
         questionCount: normalized.normalized.questions.length,
       },
     };
@@ -146,14 +239,42 @@ export class ExamsService {
 
   async listExams(actor: AuthenticatedUser) {
     if (actor.role === RoleKey.admin) {
-      return this.prisma.exam.findMany({ where: { isDeleted: false }, orderBy: { createdAt: "desc" } });
+      const exams = await this.prisma.exam.findMany({
+        where: { isDeleted: false },
+        include: {
+          subjectRef: {
+            select: {
+              id: true,
+              name: true,
+              teacherOwnerId: true,
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      return exams.map((exam) => this.toExamSummary(exam));
     }
 
     if (actor.role === RoleKey.teacher) {
-      return this.prisma.exam.findMany({
-        where: { isDeleted: false, uploadedById: actor.id },
+      const exams = await this.prisma.exam.findMany({
+        where: {
+          isDeleted: false,
+          subjectRef: {
+            teacherOwnerId: actor.id,
+          },
+        },
+        include: {
+          subjectRef: {
+            select: {
+              id: true,
+              name: true,
+              teacherOwnerId: true,
+            },
+          },
+        },
         orderBy: { createdAt: "desc" },
       });
+      return exams.map((exam) => this.toExamSummary(exam));
     }
 
     const assignments = await this.prisma.assignment.findMany({
@@ -161,14 +282,26 @@ export class ExamsService {
         assigneeStudentId: actor.id,
         examId: { not: null },
       },
-      include: { exam: true },
+      include: {
+        exam: {
+          include: {
+            subjectRef: {
+              select: {
+                id: true,
+                name: true,
+                teacherOwnerId: true,
+              },
+            },
+          },
+        },
+      },
       orderBy: { createdAt: "desc" },
     });
 
-    const unique = new Map<string, unknown>();
+    const unique = new Map<string, ReturnType<ExamsService["toExamSummary"]>>();
     for (const assignment of assignments) {
       if (assignment.exam && !assignment.exam.isDeleted) {
-        unique.set(assignment.exam.id, assignment.exam);
+        unique.set(assignment.exam.id, this.toExamSummary(assignment.exam));
       }
     }
 
@@ -176,12 +309,23 @@ export class ExamsService {
   }
 
   async getExam(actor: AuthenticatedUser, examId: string) {
-    const exam = await this.prisma.exam.findUnique({ where: { id: examId } });
+    const exam = await this.prisma.exam.findUnique({
+      where: { id: examId },
+      include: {
+        subjectRef: {
+          select: {
+            id: true,
+            name: true,
+            teacherOwnerId: true,
+          },
+        },
+      },
+    });
     if (!exam || exam.isDeleted) {
       throw new NotFoundException("Exam not found");
     }
 
-    if (actor.role === RoleKey.teacher && exam.uploadedById !== actor.id) {
+    if (actor.role === RoleKey.teacher && exam.subjectRef.teacherOwnerId !== actor.id) {
       throw new ForbiddenException("Teachers can only access owned exams");
     }
 
@@ -201,7 +345,8 @@ export class ExamsService {
     return {
       id: exam.id,
       title: exam.title,
-      subject: exam.subject,
+      subjectId: exam.subjectId,
+      subject: this.toSubject(exam.subjectRef),
       settings: exam.settingsJson,
       normalizedSchemaVersion: exam.normalizedSchemaVersion,
       questions: (exam.normalizedJson as unknown as NormalizedExam).questions,
@@ -209,22 +354,23 @@ export class ExamsService {
   }
 
   async createAssignment(actor: AuthenticatedUser, dto: CreateAssignmentDto) {
-    if (!dto.lessonId && !dto.examId) {
-      throw new BadRequestException("Assignment must reference lessonId or examId");
-    }
+    const target = await this.resolveAssignmentTarget(actor, dto);
+    const studentIds = [...new Set(dto.studentIds.map((studentId) => studentId.trim()).filter(Boolean))];
 
-    await this.assertTeacherOwnership(actor, dto.lessonId, dto.examId);
+    if (studentIds.length === 0) {
+      throw new BadRequestException("At least one student ID is required");
+    }
 
     const students = await this.prisma.user.findMany({
       where: {
-        id: { in: dto.studentIds },
+        id: { in: studentIds },
         role: RoleKey.student,
         isActive: true,
       },
       select: { id: true },
     });
 
-    if (students.length !== dto.studentIds.length) {
+    if (students.length !== studentIds.length) {
       throw new BadRequestException("One or more student IDs are invalid or inactive");
     }
 
@@ -232,14 +378,27 @@ export class ExamsService {
     const assignmentType: AssignmentTypeValue = dto.assignmentType ?? "practice";
     const maxAttempts = dto.maxAttempts ?? (assignmentType === "assessment" ? 1 : 3);
 
+    const enrollments = new Map<string, string>();
+    for (const studentId of studentIds) {
+      const enrollment = await this.subjectsService.ensureEnrollmentForManualAssignment({
+        subjectId: target.subject.id,
+        studentId,
+        actorUserId: actor.id,
+        teacherOwnerId: target.subject.teacherOwnerId,
+      });
+      enrollments.set(studentId, enrollment.enrollmentId);
+    }
+
     const created = await this.prisma.$transaction(
-      dto.studentIds.map((studentId) =>
+      studentIds.map((studentId) =>
         this.prisma.assignment.create({
           data: {
             assigneeStudentId: studentId,
-            assignedByTeacherId: actor.id,
-            lessonId: dto.lessonId,
-            examId: dto.examId,
+            assignedByTeacherId: target.subject.teacherOwnerId,
+            lessonId: target.lessonId,
+            examId: target.examId,
+            assignmentSource: "manual",
+            subjectEnrollmentId: enrollments.get(studentId),
             assignmentType,
             maxAttempts,
             dueAt,
@@ -254,8 +413,10 @@ export class ExamsService {
       entityType: "assignment_batch",
       metadataJson: {
         studentCount: created.length,
-        lessonId: dto.lessonId,
-        examId: dto.examId,
+        lessonId: target.lessonId,
+        examId: target.examId,
+        subjectId: target.subject.id,
+        teacherOwnerId: target.subject.teacherOwnerId,
         assignmentType,
         maxAttempts,
       },
@@ -271,39 +432,92 @@ export class ExamsService {
       },
       include: {
         _count: { select: { attempts: true } },
+        subjectEnrollment: {
+          select: {
+            status: true,
+          },
+        },
         lesson: {
           select: {
             id: true,
             title: true,
-            subject: true,
             gradeLevel: true,
+            subjectId: true,
+            subjectRef: {
+              select: {
+                id: true,
+                name: true,
+                teacherOwnerId: true,
+              },
+            },
           },
         },
         exam: {
           select: {
             id: true,
             title: true,
-            subject: true,
+            subjectId: true,
+            subjectRef: {
+              select: {
+                id: true,
+                name: true,
+                teacherOwnerId: true,
+              },
+            },
           },
         },
       },
       orderBy: { createdAt: "desc" },
     });
 
-    return assignments.map((assignment) => ({
-      id: assignment.id,
-      assigneeStudentId: assignment.assigneeStudentId,
-      assignedByTeacherId: assignment.assignedByTeacherId,
-      lessonId: assignment.lessonId,
-      examId: assignment.examId,
-      dueAt: assignment.dueAt,
-      createdAt: assignment.createdAt,
-      assignmentType: assignment.assignmentType,
-      maxAttempts: assignment.maxAttempts,
-      attemptsUsed: assignment._count.attempts,
-      lesson: assignment.lesson,
-      exam: assignment.exam,
-    }));
+    return assignments.map((assignment) => {
+      const subject = assignment.lesson?.subjectRef ?? assignment.exam?.subjectRef ?? null;
+
+      return {
+        id: assignment.id,
+        assigneeStudentId: assignment.assigneeStudentId,
+        assignedByTeacherId: assignment.assignedByTeacherId,
+        lessonId: assignment.lessonId,
+        examId: assignment.examId,
+        dueAt: assignment.dueAt,
+        createdAt: assignment.createdAt,
+        assignmentType: assignment.assignmentType,
+        assignmentSource: assignment.assignmentSource,
+        maxAttempts: assignment.maxAttempts,
+        attemptsUsed: assignment._count.attempts,
+        subjectEnrollmentStatus: assignment.subjectEnrollment?.status ?? null,
+        subject: subject
+          ? {
+              id: subject.id,
+              name: subject.name,
+              teacherOwnerId: subject.teacherOwnerId,
+            }
+          : null,
+        lesson: assignment.lesson
+          ? {
+              id: assignment.lesson.id,
+              title: assignment.lesson.title,
+              gradeLevel: assignment.lesson.gradeLevel,
+              subject: {
+                id: assignment.lesson.subjectRef.id,
+                name: assignment.lesson.subjectRef.name,
+                teacherOwnerId: assignment.lesson.subjectRef.teacherOwnerId,
+              },
+            }
+          : null,
+        exam: assignment.exam
+          ? {
+              id: assignment.exam.id,
+              title: assignment.exam.title,
+              subject: {
+                id: assignment.exam.subjectRef.id,
+                name: assignment.exam.subjectRef.name,
+                teacherOwnerId: assignment.exam.subjectRef.teacherOwnerId,
+              },
+            }
+          : null,
+      };
+    });
   }
 
   async createAttempt(student: AuthenticatedUser, dto: CreateAttemptDto) {
@@ -602,8 +816,15 @@ export class ExamsService {
           select: {
             id: true,
             title: true,
-            subject: true,
+            subjectId: true,
             settingsJson: true,
+            subjectRef: {
+              select: {
+                id: true,
+                name: true,
+                teacherOwnerId: true,
+              },
+            },
           },
         },
         responses: true,
@@ -636,6 +857,12 @@ export class ExamsService {
       }
     }
 
-    return attempt;
+    return {
+      ...attempt,
+      exam: {
+        ...attempt.exam,
+        subject: this.toSubject(attempt.exam.subjectRef),
+      },
+    };
   }
 }

@@ -25,34 +25,89 @@ enum AssignmentType {
   assessment
 }
 
+enum EnrollmentStatus {
+  active
+  completed
+}
+
+enum AssignmentSource {
+  manual
+  subject_auto
+}
+
 model User {
-  id               String       @id @default(cuid())
-  email            String       @unique
+  id               String   @id @default(cuid())
+  email            String   @unique
   passwordHash     String
   role             RoleKey
-  isActive         Boolean      @default(true)
+  isActive         Boolean  @default(true)
   refreshTokenHash String?
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  uploadedLessons  Lesson[]     @relation("lesson_uploader")
-  uploadedExams    Exam[]       @relation("exam_uploader")
-  studentAssignments Assignment[] @relation("assignment_student")
-  teacherAssignments Assignment[] @relation("assignment_teacher")
-  attempts         Attempt[]    @relation("attempt_student")
-  auditEvents      AuditEvent[] @relation("audit_actor")
-  updatedRoleLabels RoleLabel[] @relation("role_label_updater")
+  uploadedLessons      Lesson[]            @relation("lesson_uploader")
+  uploadedExams        Exam[]              @relation("exam_uploader")
+  ownedSubjects        Subject[]           @relation("subject_owner")
+  subjectEnrollments   SubjectEnrollment[] @relation("enrollment_student")
+  createdEnrollments   SubjectEnrollment[] @relation("enrollment_actor")
+  completedEnrollments SubjectEnrollment[] @relation("enrollment_completed_actor")
+  studentAssignments   Assignment[]        @relation("assignment_student")
+  teacherAssignments   Assignment[]        @relation("assignment_teacher")
+  attempts             Attempt[]           @relation("attempt_student")
+  auditEvents          AuditEvent[]        @relation("audit_actor")
+  updatedRoleLabels    RoleLabel[]         @relation("role_label_updater")
 
   @@index([role, isActive])
 }
 
 model RoleLabel {
-  roleKey     RoleKey  @id
+  roleKey      RoleKey  @id
   displayLabel String
-  updatedById String?
-  updatedAt   DateTime @updatedAt
+  updatedById  String?
+  updatedAt    DateTime @updatedAt
 
   updatedBy User? @relation("role_label_updater", fields: [updatedById], references: [id], onDelete: SetNull)
+}
+
+model Subject {
+  id             String   @id @default(cuid())
+  teacherOwnerId String
+  name           String
+  nameNormalized String
+  isArchived     Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  teacherOwner User                @relation("subject_owner", fields: [teacherOwnerId], references: [id], onDelete: Restrict)
+  lessons      Lesson[]
+  exams        Exam[]
+  enrollments  SubjectEnrollment[]
+
+  @@unique([teacherOwnerId, nameNormalized])
+  @@index([teacherOwnerId, isArchived, createdAt])
+}
+
+model SubjectEnrollment {
+  id                String           @id @default(cuid())
+  subjectId         String
+  studentId         String
+  status            EnrollmentStatus @default(active)
+  autoAssignFuture  Boolean          @default(true)
+  enrolledByUserId  String
+  completedAt       DateTime?
+  completedByUserId String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  subject     Subject      @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  student     User         @relation("enrollment_student", fields: [studentId], references: [id], onDelete: Cascade)
+  enrolledBy  User         @relation("enrollment_actor", fields: [enrolledByUserId], references: [id], onDelete: Restrict)
+  completedBy User?        @relation("enrollment_completed_actor", fields: [completedByUserId], references: [id], onDelete: SetNull)
+  assignments Assignment[]
+
+  @@unique([subjectId, studentId])
+  @@index([subjectId, status])
+  @@index([studentId, status])
 }
 
 model Lesson {
@@ -60,6 +115,7 @@ model Lesson {
   title        String
   gradeLevel   String?
   subject      String
+  subjectId    String
   contentPath  String
   metadataJson Json
   uploadedById String
@@ -67,14 +123,18 @@ model Lesson {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  subjectRef  Subject      @relation(fields: [subjectId], references: [id], onDelete: Restrict)
   uploadedBy  User         @relation("lesson_uploader", fields: [uploadedById], references: [id], onDelete: Restrict)
   assignments Assignment[]
+
+  @@index([subjectId, createdAt])
 }
 
 model Exam {
   id                      String   @id @default(cuid())
   title                   String
   subject                 String
+  subjectId               String
   settingsJson            Json
   normalizedJson          Json
   normalizedSchemaVersion String
@@ -83,29 +143,36 @@ model Exam {
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
+  subjectRef  Subject      @relation(fields: [subjectId], references: [id], onDelete: Restrict)
   uploadedBy  User         @relation("exam_uploader", fields: [uploadedById], references: [id], onDelete: Restrict)
   assignments Assignment[]
   attempts    Attempt[]
+
+  @@index([subjectId, createdAt])
 }
 
 model Assignment {
-  id                  String   @id @default(cuid())
+  id                  String           @id @default(cuid())
   assigneeStudentId   String
   assignedByTeacherId String
   lessonId            String?
   examId              String?
-  assignmentType      AssignmentType @default(practice)
-  maxAttempts         Int @default(3)
+  assignmentSource    AssignmentSource @default(manual)
+  subjectEnrollmentId String?
+  assignmentType      AssignmentType   @default(practice)
+  maxAttempts         Int              @default(3)
   dueAt               DateTime?
-  createdAt           DateTime @default(now())
+  createdAt           DateTime         @default(now())
 
-  assigneeStudent   User   @relation("assignment_student", fields: [assigneeStudentId], references: [id], onDelete: Cascade)
-  assignedByTeacher User   @relation("assignment_teacher", fields: [assignedByTeacherId], references: [id], onDelete: Restrict)
-  lesson            Lesson? @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-  exam              Exam?   @relation(fields: [examId], references: [id], onDelete: Cascade)
+  assigneeStudent   User               @relation("assignment_student", fields: [assigneeStudentId], references: [id], onDelete: Cascade)
+  assignedByTeacher User               @relation("assignment_teacher", fields: [assignedByTeacherId], references: [id], onDelete: Restrict)
+  lesson            Lesson?            @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  exam              Exam?              @relation(fields: [examId], references: [id], onDelete: Cascade)
+  subjectEnrollment SubjectEnrollment? @relation(fields: [subjectEnrollmentId], references: [id], onDelete: SetNull)
   attempts          Attempt[]
 
   @@index([assigneeStudentId, dueAt])
+  @@index([subjectEnrollmentId])
 }
 
 model Attempt {
@@ -120,9 +187,9 @@ model Attempt {
   gradingSummaryJson Json?
 
   assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
-  exam      Exam      @relation(fields: [examId], references: [id], onDelete: Cascade)
-  student   User      @relation("attempt_student", fields: [studentId], references: [id], onDelete: Cascade)
-  responses Response[]
+  exam       Exam       @relation(fields: [examId], references: [id], onDelete: Cascade)
+  student    User       @relation("attempt_student", fields: [studentId], references: [id], onDelete: Cascade)
+  responses  Response[]
 
   @@index([studentId, examId, status])
   @@index([assignmentId, status])
@@ -144,13 +211,13 @@ model Response {
 }
 
 model AuditEvent {
-  id          String   @id @default(cuid())
-  actorUserId String
-  action      String
-  entityType  String
-  entityId    String?
+  id           String   @id @default(cuid())
+  actorUserId  String
+  action       String
+  entityType   String
+  entityId     String?
   metadataJson Json?
-  createdAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
 
   actor User @relation("audit_actor", fields: [actorUserId], references: [id], onDelete: Cascade)
 

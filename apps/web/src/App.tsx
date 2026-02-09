@@ -17,6 +17,7 @@ function RoleGuide({ role }: { role: MeResponse["role"] }) {
         <ol className="steps">
           <li>Create at least one teacher and one student account.</li>
           <li>Share credentials with users so they can sign in.</li>
+          <li>Select a teacher in Teacher Workspace to manage their subjects and enrollments.</li>
           <li>Use Audit Events to confirm key actions are being recorded.</li>
         </ol>
       </section>
@@ -28,10 +29,10 @@ function RoleGuide({ role }: { role: MeResponse["role"] }) {
       <section className="panel help-card">
         <h3>What to do first (Teacher)</h3>
         <ol className="steps">
-          <li>Upload lesson ZIP files (optional) and exam JSON files.</li>
-          <li>Create assignments for students using student IDs.</li>
-          <li>Choose assignment type: practice or assessment.</li>
-          <li>Students can then start and submit attempts.</li>
+          <li>Create one or more subjects.</li>
+          <li>Enroll students into a subject (creates whole-subject assignment flow).</li>
+          <li>Upload lesson ZIP and exam JSON under that subject.</li>
+          <li>Assign specific items when you need targeted work.</li>
         </ol>
       </section>
     );

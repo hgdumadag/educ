@@ -1,5 +1,11 @@
 export type RoleKey = "admin" | "teacher" | "student";
 
+export type AssignmentType = "practice" | "assessment";
+
+export type AssignmentSource = "manual" | "subject_auto";
+
+export type EnrollmentStatus = "active" | "completed";
+
 export interface MeResponse {
   id: string;
   email: string;
@@ -8,23 +14,86 @@ export interface MeResponse {
   permissions: string[];
 }
 
+export interface SubjectRef {
+  id: string;
+  name: string;
+  teacherOwnerId: string;
+}
+
+export interface SubjectSummary extends SubjectRef {
+  isArchived: boolean;
+  createdAt: string;
+  updatedAt: string;
+  teacherOwner?: {
+    id: string;
+    email: string;
+  };
+  _count?: {
+    lessons: number;
+    exams: number;
+    enrollments: number;
+  };
+}
+
+export interface SubjectRosterItem {
+  id: string;
+  subjectId: string;
+  studentId: string;
+  status: EnrollmentStatus;
+  autoAssignFuture: boolean;
+  completedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  student: {
+    id: string;
+    email: string;
+    isActive: boolean;
+  };
+}
+
+export interface TeacherListItem {
+  id: string;
+  email: string;
+  role: "teacher";
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface LessonSummary {
+  id: string;
+  title: string;
+  gradeLevel?: string | null;
+  subjectId: string;
+  subject: SubjectRef;
+}
+
+export interface ExamSummary {
+  id: string;
+  title: string;
+  subjectId: string;
+  subject: SubjectRef;
+}
+
 export interface Assignment {
   id: string;
   examId?: string;
   lessonId?: string;
   dueAt?: string;
-  assignmentType: "practice" | "assessment";
+  assignmentType: AssignmentType;
+  assignmentSource: AssignmentSource;
   maxAttempts: number;
   attemptsUsed: number;
+  subjectEnrollmentStatus?: EnrollmentStatus | null;
+  subject?: SubjectRef | null;
   exam?: {
     id: string;
     title: string;
-    subject: string;
+    subject: SubjectRef;
   } | null;
   lesson?: {
     id: string;
     title: string;
-    subject: string;
+    subject: SubjectRef;
     gradeLevel?: string | null;
   } | null;
 }
@@ -39,6 +108,7 @@ export interface ExamQuestion {
 export interface ExamDetails {
   id: string;
   title: string;
-  subject: string;
+  subjectId: string;
+  subject: SubjectRef;
   questions: ExamQuestion[];
 }

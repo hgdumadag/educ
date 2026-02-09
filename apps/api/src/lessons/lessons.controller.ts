@@ -1,4 +1,5 @@
 import {
+  Body,
   BadRequestException,
   Controller,
   Delete,
@@ -52,9 +53,10 @@ export class LessonsController {
   )
   async upload(
     @CurrentUser() actor: AuthenticatedUser,
+    @Body("subjectId") subjectId: string,
     @UploadedFile() file?: UploadedFileType,
   ) {
-    return this.lessonsService.uploadLesson(actor, file);
+    return this.lessonsService.uploadLesson(actor, subjectId, file);
   }
 
   @Get()

@@ -41,8 +41,10 @@ const PERMISSIONS: Record<RoleKey, string[]> = {
     "labels:update",
     "reports:read",
     "audit:read",
+    "subjects:manage:any",
   ],
   teacher: [
+    "subjects:manage:own",
     "lessons:upload",
     "exams:upload",
     "assignments:create",

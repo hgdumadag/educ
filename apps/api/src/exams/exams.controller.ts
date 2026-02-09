@@ -1,6 +1,6 @@
 import {
-  BadRequestException,
   Body,
+  BadRequestException,
   Controller,
   Get,
   Inject,
@@ -57,9 +57,10 @@ export class ExamsController {
   )
   async uploadExam(
     @CurrentUser() actor: AuthenticatedUser,
+    @Body("subjectId") subjectId: string,
     @UploadedFile() file?: UploadedFileType,
   ) {
-    return this.examsService.uploadExam(actor, file);
+    return this.examsService.uploadExam(actor, subjectId, file);
   }
 
   @Get("exams")

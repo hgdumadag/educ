@@ -1,4 +1,13 @@
-import type { Assignment, ExamDetails, MeResponse } from "../types";
+import type {
+  Assignment,
+  ExamDetails,
+  ExamSummary,
+  LessonSummary,
+  MeResponse,
+  SubjectRosterItem,
+  SubjectSummary,
+  TeacherListItem,
+} from "../types";
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000/api";
 const CSRF_COOKIE = "educ_csrf_token";
@@ -120,6 +129,24 @@ export const api = {
     });
   },
 
+  async listUsers(role?: "teacher" | "student" | "admin") {
+    const suffix = role ? `?role=${encodeURIComponent(role)}` : "";
+    return request<Array<{ id: string; email: string; role: "teacher" | "student" | "admin"; isActive: boolean; createdAt: string }>>(
+      `/admin/users${suffix}`,
+      { method: "GET" },
+    );
+  },
+
+  async listTeachers(): Promise<TeacherListItem[]> {
+    const users = await this.listUsers("teacher");
+    return users
+      .filter((user) => user.role === "teacher" && user.isActive)
+      .map((user) => ({
+        ...user,
+        role: "teacher",
+      }));
+  },
+
   async getAuditEvents() {
     return request<{ items: Array<{ id: string; action: string; createdAt: string }> }>(
       "/admin/audit-events?page=1&pageSize=10",
@@ -127,20 +154,77 @@ export const api = {
     );
   },
 
-  async uploadLesson(file: File) {
+  async createSubject(payload: { name: string; teacherOwnerId?: string }) {
+    return request<SubjectSummary>("/subjects", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async listSubjects(params?: { teacherId?: string; includeArchived?: boolean }) {
+    const search = new URLSearchParams();
+    if (params?.teacherId) {
+      search.set("teacherId", params.teacherId);
+    }
+    if (params?.includeArchived !== undefined) {
+      search.set("includeArchived", String(params.includeArchived));
+    }
+    const suffix = search.toString() ? `?${search.toString()}` : "";
+    return request<SubjectSummary[]>(`/subjects${suffix}`, { method: "GET" });
+  },
+
+  async updateSubject(subjectId: string, payload: { name?: string; isArchived?: boolean }) {
+    return request<SubjectSummary>(`/subjects/${subjectId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async listSubjectStudents(subjectId: string) {
+    return request<SubjectRosterItem[]>(`/subjects/${subjectId}/students`, { method: "GET" });
+  },
+
+  async enrollSubjectStudent(
+    subjectId: string,
+    payload: { email: string; temporaryPassword?: string; autoAssignFuture?: boolean },
+  ) {
+    return request(`/subjects/${subjectId}/students`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async updateSubjectStudent(
+    subjectId: string,
+    studentId: string,
+    payload: { status?: "active" | "completed"; autoAssignFuture?: boolean },
+  ) {
+    return request(`/subjects/${subjectId}/students/${studentId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async uploadLesson(file: File, subjectId: string) {
     const body = new FormData();
     body.append("file", file);
+    body.append("subjectId", subjectId);
     return request("/lessons/upload", { method: "POST", body });
   },
 
-  async uploadExam(file: File) {
+  async listLessons() {
+    return request<LessonSummary[]>("/lessons", { method: "GET" });
+  },
+
+  async uploadExam(file: File, subjectId: string) {
     const body = new FormData();
     body.append("file", file);
+    body.append("subjectId", subjectId);
     return request("/exams/upload", { method: "POST", body });
   },
 
   async listExams() {
-    return request<Array<{ id: string; title: string; subject: string }>>(
+    return request<ExamSummary[]>(
       "/exams",
       { method: "GET" },
     );

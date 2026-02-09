@@ -45,6 +45,13 @@ body {
   align-items: center;
 }
 
+.row-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
 label {
   display: flex;
   flex-direction: column;
@@ -217,6 +224,23 @@ button:hover {
 
 .question-title {
   font-weight: 600;
+}
+
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.5rem;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.checkbox-row.compact {
+  font-size: 0.85rem;
 }
 
 pre {

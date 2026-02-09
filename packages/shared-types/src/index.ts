@@ -7,6 +7,8 @@ export type AttemptStatus =
   | "needs_review";
 
 export type AssignmentType = "practice" | "assessment";
+export type AssignmentSource = "manual" | "subject_auto";
+export type EnrollmentStatus = "active" | "completed";
 
 export type QuestionType =
   | "multiple-choice"
@@ -86,4 +88,33 @@ export interface AttemptSubmitSummary {
 
 export interface CreateAttemptPayload {
   assignmentId: string;
+}
+
+export interface SubjectSummary {
+  id: string;
+  teacherOwnerId: string;
+  name: string;
+  isArchived: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SubjectEnrollment {
+  id: string;
+  subjectId: string;
+  studentId: string;
+  status: EnrollmentStatus;
+  autoAssignFuture: boolean;
+  completedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SubjectRosterItem {
+  enrollment: SubjectEnrollment;
+  student: {
+    id: string;
+    email: string;
+    isActive: boolean;
+  };
 }
