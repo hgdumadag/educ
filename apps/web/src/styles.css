@@ -730,7 +730,9 @@ button:hover {
 }
 
 .admin-bottom-tab {
-  flex: 1 0 140px;
+  /* Allow more tabs to fit before we require horizontal scrolling. */
+  flex: 1 1 0;
+  min-width: 110px;
   background: transparent;
   color: #d6ebf9;
   border: 1px solid transparent;
@@ -793,6 +795,7 @@ pre {
   .admin-bottom-tab {
     font-size: 0.75rem;
     padding: 0.48rem 0.22rem;
+    min-width: 92px;
   }
 
   .admin-audit-item {
