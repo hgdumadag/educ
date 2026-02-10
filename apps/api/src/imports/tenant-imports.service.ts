@@ -80,6 +80,33 @@ function readBoolean(row: TabularRow, keys: string[], fallback: boolean): boolea
   return fallback;
 }
 
+function normalizeMarkdownCell(input: string): string {
+  let value = input.trim();
+  if (!value) {
+    return value;
+  }
+
+  const hasRealNewlines = value.includes("\n");
+  const hasEscapedNewlines = value.includes("\\n") || value.includes("\\r\\n");
+  if (hasEscapedNewlines && !hasRealNewlines) {
+    if (
+      (value.startsWith("\"") && value.endsWith("\"")) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    value = value
+      .replace(/\\r\\n/g, "\n")
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .replace(/\\"/g, "\"")
+      .replace(/\\'/g, "'");
+  }
+
+  return value;
+}
+
 function toLessonZip(args: {
   subjectName: string;
   title: string;
@@ -95,7 +122,7 @@ function toLessonZip(args: {
   };
   const markdown =
     args.markdown && args.markdown.trim()
-      ? args.markdown.trim()
+      ? normalizeMarkdownCell(args.markdown)
       : `# ${args.title}\n\n*(Imported via Axiometry bulk upload)*\n\n## Overview\nAdd lesson content here.\n`;
 
   zip.addFile("metadata.json", Buffer.from(JSON.stringify(metadata, null, 2), "utf8"));
@@ -761,4 +788,3 @@ export class TenantImportsService {
     }
   }
 }
-

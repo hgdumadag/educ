@@ -32,6 +32,33 @@ export class LessonsService {
     @Inject(SubjectsService) private readonly subjectsService: SubjectsService,
   ) {}
 
+  private normalizeMarkdownForPreview(markdown: string): string {
+    const trimmed = markdown.trim();
+    if (!trimmed) {
+      return markdown;
+    }
+
+    // If content was imported from a CSV/Excel cell using literal `\n` escapes, normalize to real newlines.
+    if (!trimmed.includes("\n") && (trimmed.includes("\\n") || trimmed.includes("\\r\\n"))) {
+      let value = trimmed;
+      if (
+        (value.startsWith("\"") && value.endsWith("\"")) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      value = value
+        .replace(/\\r\\n/g, "\n")
+        .replace(/\\n/g, "\n")
+        .replace(/\\t/g, "\t")
+        .replace(/\\"/g, "\"")
+        .replace(/\\'/g, "'");
+      return value;
+    }
+
+    return markdown;
+  }
+
   private async persistFile(file: UploadedFile): Promise<string> {
     const directory = path.join(env.uploadLocalPath, "lessons");
     await mkdir(directory, { recursive: true });
@@ -381,7 +408,8 @@ export class LessonsService {
       throw new BadRequestException("Lesson package is missing content.md");
     }
 
-    const markdown = contentEntry.getData().toString("utf8");
+    const rawMarkdown = contentEntry.getData().toString("utf8");
+    const markdown = this.normalizeMarkdownForPreview(rawMarkdown);
 
     return {
       lessonId: lesson.id,
