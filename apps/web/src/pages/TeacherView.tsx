@@ -124,6 +124,7 @@ export function TeacherView(props: TeacherViewProps) {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
   const [importReport, setImportReport] = useState<unknown>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const selectedSubject = useMemo(
     () => subjects.find((subject) => subject.id === selectedSubjectId) ?? null,
@@ -215,12 +216,12 @@ export function TeacherView(props: TeacherViewProps) {
 
   const assignmentItems = assignmentKind === "exam" ? visibleExams : visibleLessons;
 
-  async function refreshSubjects() {
+  async function refreshSubjects(): Promise<SubjectSummary[]> {
     if (adminMode && !teacherScopeId) {
       setSubjects([]);
       setSelectedSubjectId("");
       setRosterBySubject({});
-      return;
+      return [];
     }
 
     try {
@@ -242,9 +243,33 @@ export function TeacherView(props: TeacherViewProps) {
       if (data.length === 0) {
         setRosterBySubject({});
       }
+      return data;
+    } catch (error) {
+      setMessage(String(error));
+      return subjects;
+    }
+  }
+
+  async function refreshRostersForSubjectIds(subjectIds: string[]) {
+    if (subjectIds.length === 0) {
+      return;
+    }
+
+    try {
+      const entries = await Promise.all(
+        subjectIds.map(async (subjectId) => [subjectId, await api.listSubjectStudents(subjectId)] as const),
+      );
+      setRosterBySubject((current) => ({ ...current, ...Object.fromEntries(entries) }));
     } catch (error) {
       setMessage(String(error));
     }
+  }
+
+  async function refreshRosterForSubject(subjectId: string) {
+    if (!subjectId) {
+      return;
+    }
+    await refreshRostersForSubjectIds([subjectId]);
   }
 
   async function refreshAllRosters(subjectList?: SubjectSummary[]) {
@@ -253,15 +278,7 @@ export function TeacherView(props: TeacherViewProps) {
       setRosterBySubject({});
       return;
     }
-
-    try {
-      const entries = await Promise.all(
-        targetSubjects.map(async (subject) => [subject.id, await api.listSubjectStudents(subject.id)] as const),
-      );
-      setRosterBySubject(Object.fromEntries(entries));
-    } catch (error) {
-      setMessage(String(error));
-    }
+    await refreshRostersForSubjectIds(targetSubjects.map((subject) => subject.id));
   }
 
   async function refreshContent() {
@@ -277,6 +294,44 @@ export function TeacherView(props: TeacherViewProps) {
       setExams(examData);
     } catch (error) {
       setMessage(String(error));
+    }
+  }
+
+  async function smartRefresh(options?: { forceFull?: boolean }) {
+    if (refreshing) {
+      return;
+    }
+
+    setRefreshing(true);
+    setMessage("");
+    try {
+      const nextSubjects = await refreshSubjects();
+
+      const wantsContent =
+        options?.forceFull ||
+        activeTab === "overview" ||
+        activeTab === "subjects" ||
+        activeTab === "lessons" ||
+        activeTab === "exams" ||
+        activeTab === "subject_assignments";
+
+      const wantsAllRosters =
+        options?.forceFull || activeTab === "students" || activeTab === "subjects" || activeTab === "overview";
+
+      if (wantsContent) {
+        await refreshContent();
+      }
+
+      if (wantsAllRosters) {
+        await refreshAllRosters(nextSubjects);
+      } else {
+        // Keep the selected subject summary fresh without re-fetching every roster.
+        await refreshRosterForSubject(selectedSubjectId);
+      }
+
+      setMessage("Refreshed.");
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -343,18 +398,10 @@ export function TeacherView(props: TeacherViewProps) {
       });
       setNewSubjectName("");
       setMessage(`Subject created: ${created.name}`);
-      await refreshSubjects();
-      await refreshContent();
-      const newSubjects = await api.listSubjects(
-        adminMode
-          ? {
-              teacherId: teacherScopeId,
-            }
-          : undefined,
-      );
-      setSubjects(newSubjects);
+      const newSubjects = await refreshSubjects();
       setSelectedSubjectId(created.id);
       await refreshAllRosters(newSubjects);
+      await refreshContent();
     } catch (error) {
       setMessage(String(error));
     }
@@ -382,7 +429,7 @@ export function TeacherView(props: TeacherViewProps) {
         autoAssignFuture: args.autoAssignFuture ?? true,
       });
       setMessage("Student enrolled to subject.");
-      await refreshAllRosters();
+      await refreshRosterForSubject(selectedSubjectId);
     } catch (error) {
       setMessage(String(error));
     }
@@ -410,7 +457,7 @@ export function TeacherView(props: TeacherViewProps) {
     try {
       await api.updateSubjectStudent(selectedSubjectId, studentId, { status });
       setMessage(status === "completed" ? "Enrollment marked completed." : "Enrollment reactivated.");
-      await refreshAllRosters();
+      await refreshRosterForSubject(selectedSubjectId);
     } catch (error) {
       setMessage(String(error));
     }
@@ -424,7 +471,7 @@ export function TeacherView(props: TeacherViewProps) {
     try {
       await api.updateSubjectStudent(selectedSubjectId, studentId, { autoAssignFuture });
       setMessage("Enrollment updated.");
-      await refreshAllRosters();
+      await refreshRosterForSubject(selectedSubjectId);
     } catch (error) {
       setMessage(String(error));
     }
@@ -587,14 +634,8 @@ export function TeacherView(props: TeacherViewProps) {
             </option>
           ))}
         </select>
-        <button type="button" className="button-secondary" onClick={() => void refreshSubjects()}>
-          Refresh Subjects
-        </button>
-        <button type="button" className="button-secondary" onClick={() => void refreshContent()}>
-          Refresh Content
-        </button>
-        <button type="button" className="button-secondary" onClick={() => void refreshAllRosters()}>
-          Refresh Rosters
+        <button type="button" className="button-secondary" onClick={() => void smartRefresh({ forceFull: true })} disabled={refreshing}>
+          {refreshing ? "Refreshing..." : "Refresh"}
         </button>
       </div>
       {selectedSubject ? (
@@ -1163,19 +1204,17 @@ export function TeacherView(props: TeacherViewProps) {
               void (async () => {
                 setImporting(true);
                 setMessage("");
-                setImportReport(null);
-                try {
-                  const report = await api.importTenant(importKind, importFile);
-                  setImportReport(report);
-                  setMessage("Import completed.");
-                  await refreshSubjects();
-                  await refreshContent();
-                  await refreshAllRosters();
-                } catch (error) {
-                  setMessage(String(error));
-                } finally {
-                  setImporting(false);
-                }
+                  setImportReport(null);
+                  try {
+                    const report = await api.importTenant(importKind, importFile);
+                    setImportReport(report);
+                    setMessage("Import completed.");
+                    await smartRefresh({ forceFull: true });
+                  } catch (error) {
+                    setMessage(String(error));
+                  } finally {
+                    setImporting(false);
+                  }
               })();
             }}
           >
@@ -1321,15 +1360,20 @@ export function TeacherView(props: TeacherViewProps) {
                   </option>
                 ))}
               </select>
-            </label>
-            <div className="row-wrap">
-              <button type="button" className="button-secondary" onClick={() => void refreshSubjects()}>
-                Refresh
-              </button>
-            </div>
-          </div>
-        </section>
-      ) : null}
+	            </label>
+	            <div className="row-wrap">
+	              <button
+                  type="button"
+                  className="button-secondary"
+                  onClick={() => void smartRefresh({ forceFull: true })}
+                  disabled={refreshing}
+                >
+	                {refreshing ? "Refreshing..." : "Refresh"}
+	              </button>
+	            </div>
+	          </div>
+	        </section>
+	      ) : null}
 
       {coreContent}
 
