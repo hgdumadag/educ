@@ -105,6 +105,12 @@ export function TeacherView(props: TeacherViewProps) {
   const [assignmentType, setAssignmentType] = useState<"practice" | "assessment">("practice");
   const [maxAttempts, setMaxAttempts] = useState("");
 
+  const [studentSearch, setStudentSearch] = useState("");
+  const [studentSubjectFilter, setStudentSubjectFilter] = useState<string>("");
+  const [studentStatusFilter, setStudentStatusFilter] = useState<"all" | "active" | "inactive">("all");
+  const [studentLimit, setStudentLimit] = useState(60);
+  const [focusedStudentId, setFocusedStudentId] = useState<string>("");
+
   const [message, setMessage] = useState("");
   const [importKind, setImportKind] = useState<"subjects" | "students" | "students_subjects" | "students_subjects_lessons">("subjects");
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -163,6 +169,41 @@ export function TeacherView(props: TeacherViewProps) {
 
     return [...map.values()].sort((a, b) => a.email.localeCompare(b.email));
   }, [subjects, rosterBySubject]);
+
+  const filteredStudents = useMemo(() => {
+    const query = studentSearch.trim().toLowerCase();
+    return allStudents.filter((student) => {
+      if (studentStatusFilter !== "all") {
+        const wantsActive = studentStatusFilter === "active";
+        if (student.isActive !== wantsActive) {
+          return false;
+        }
+      }
+
+      if (studentSubjectFilter) {
+        if (!student.subjects.some((subject) => subject.id === studentSubjectFilter)) {
+          return false;
+        }
+      }
+
+      if (!query) {
+        return true;
+      }
+
+      const haystack = `${student.email} ${student.displayName ?? ""}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [allStudents, studentSearch, studentStatusFilter, studentSubjectFilter]);
+
+  const visibleStudents = useMemo(
+    () => filteredStudents.slice(0, Math.max(10, studentLimit)),
+    [filteredStudents, studentLimit],
+  );
+
+  const focusedStudent = useMemo(
+    () => allStudents.find((student) => student.studentId === focusedStudentId) ?? null,
+    [allStudents, focusedStudentId],
+  );
 
   const assignmentItems = assignmentKind === "exam" ? visibleExams : visibleLessons;
 
@@ -311,33 +352,46 @@ export function TeacherView(props: TeacherViewProps) {
     }
   }
 
-  async function handleEnrollStudent(event: FormEvent) {
-    event.preventDefault();
-
+  async function enrollStudentByEmail(args: {
+    email: string;
+    temporaryPassword?: string;
+    autoAssignFuture?: boolean;
+  }) {
     if (!selectedSubjectId) {
       setMessage("Select a subject first.");
       return;
     }
 
-    if (!enrollEmail.trim()) {
+    if (!args.email.trim()) {
       setMessage("Student email is required.");
       return;
     }
 
     try {
       await api.enrollSubjectStudent(selectedSubjectId, {
-        email: enrollEmail,
-        temporaryPassword: enrollPassword || undefined,
-        autoAssignFuture: enrollAutoAssignFuture,
+        email: args.email,
+        temporaryPassword: args.temporaryPassword,
+        autoAssignFuture: args.autoAssignFuture ?? true,
       });
-      setEnrollEmail("");
-      setEnrollPassword("");
-      setEnrollAutoAssignFuture(true);
       setMessage("Student enrolled to subject.");
       await refreshAllRosters();
     } catch (error) {
       setMessage(String(error));
     }
+  }
+
+  async function handleEnrollStudent(event: FormEvent) {
+    event.preventDefault();
+
+    await enrollStudentByEmail({
+      email: enrollEmail,
+      temporaryPassword: enrollPassword || undefined,
+      autoAssignFuture: enrollAutoAssignFuture,
+    });
+
+    setEnrollEmail("");
+    setEnrollPassword("");
+    setEnrollAutoAssignFuture(true);
   }
 
   async function handleSetEnrollmentStatus(studentId: string, status: "active" | "completed") {
@@ -627,104 +681,251 @@ export function TeacherView(props: TeacherViewProps) {
       {activeTab === "students" ? (
         <section className="panel stack">
           <h3>My Students</h3>
-          <p className="muted">All students across your Axiometry subjects, plus enrollment controls for the selected subject.</p>
+          <p className="muted">
+            Use the directory to find a student quickly. Use the right panel to manage enrollment for the selected subject.
+          </p>
 
-          <div className="student-overview-grid">
-            {allStudents.length === 0 ? (
-              <p className="muted">No enrolled students yet.</p>
-            ) : (
-              allStudents.map((student) => (
-                <article key={student.studentId} className="assignment-card">
-                  <div className="assignment-head">
-                    <h4>
-                      {student.displayName ? `${student.displayName} (${student.email})` : student.email}
-                    </h4>
-                    <span className={`badge ${student.isActive ? "practice" : "assessment"}`}>
-                      {student.isActive ? "active" : "inactive"}
-                    </span>
-                  </div>
-                  <p className="assignment-meta">Student ID: {student.studentId}</p>
-                  <p className="assignment-meta">
-                    Subjects: {student.subjects.map((subject) => `${subject.name} (${subject.status})`).join(", ")}
-                  </p>
-                </article>
-              ))
-            )}
-          </div>
+          <section className="admin-layout-grid">
+            <article className="panel stack">
+              <div className="row-wrap">
+                <h4>Student Directory</h4>
+                <span className="admin-chip">{filteredStudents.length} shown</span>
+              </div>
 
-          <h4>Enroll Student Into Selected Subject</h4>
-          <form onSubmit={handleEnrollStudent} className="stack">
-            <label>
-              Student Email
-              <input
-                type="email"
-                value={enrollEmail}
-                onChange={(event) => setEnrollEmail(event.target.value)}
-                placeholder="student@example.com"
-              />
-            </label>
-            <label>
-              Temporary Password (required only for new students)
-              <input
-                type="password"
-                value={enrollPassword}
-                onChange={(event) => setEnrollPassword(event.target.value)}
-                minLength={8}
-                placeholder="At least 8 characters"
-              />
-            </label>
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={enrollAutoAssignFuture}
-                onChange={(event) => setEnrollAutoAssignFuture(event.target.checked)}
-              />
-              Auto-assign future content for this subject
-            </label>
-            <button type="submit" disabled={!selectedSubjectId}>Enroll Student</button>
-          </form>
+              <div className="admin-toolbar-grid">
+                <label>
+                  Search
+                  <input
+                    value={studentSearch}
+                    onChange={(event) => {
+                      setStudentSearch(event.target.value);
+                      setStudentLimit(60);
+                    }}
+                    placeholder="Search name or email"
+                  />
+                </label>
 
-          <h4>Students Assigned Per Subject ({selectedSubject?.name ?? "No subject selected"})</h4>
-          {selectedRoster.length === 0 ? (
-            <p className="muted">No students enrolled in selected subject.</p>
-          ) : (
-            <div className="assignment-grid">
-              {selectedRoster.map((item) => (
-                <article className="assignment-card" key={item.id}>
-                  <div className="assignment-head">
-                    <h4>
-                      {item.student.displayName
-                        ? `${item.student.displayName} (${item.student.email})`
-                        : item.student.email}
-                    </h4>
-                    <span className={`badge ${item.status === "active" ? "practice" : "assessment"}`}>
-                      {item.status}
-                    </span>
-                  </div>
-                  <p className="assignment-meta">Student ID: {item.student.id}</p>
-                  <p className="assignment-meta">
-                    Auto-assign future: {item.autoAssignFuture ? "enabled" : "disabled"}
-                  </p>
+                <label>
+                  Subject filter
+                  <select
+                    value={studentSubjectFilter}
+                    onChange={(event) => {
+                      setStudentSubjectFilter(event.target.value);
+                      setStudentLimit(60);
+                    }}
+                  >
+                    <option value="">All subjects</option>
+                    {subjects.map((subject) => (
+                      <option key={subject.id} value={subject.id}>
+                        {subject.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Status
+                  <select
+                    value={studentStatusFilter}
+                    onChange={(event) => {
+                      setStudentStatusFilter(event.target.value as typeof studentStatusFilter);
+                      setStudentLimit(60);
+                    }}
+                  >
+                    <option value="all">all</option>
+                    <option value="active">active</option>
+                    <option value="inactive">inactive</option>
+                  </select>
+                </label>
+
+                <div className="row-wrap">
+                  <button
+                    type="button"
+                    className="button-secondary"
+                    onClick={() => {
+                      setStudentSearch("");
+                      setStudentSubjectFilter("");
+                      setStudentStatusFilter("all");
+                      setStudentLimit(60);
+                    }}
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
+
+              {visibleStudents.length === 0 ? (
+                <p className="muted">No students match the current filter.</p>
+              ) : (
+                <div className="assignment-grid">
+                  {visibleStudents.map((student) => {
+                    const isFocused = student.studentId === focusedStudentId;
+                    const enrolledInSelected = selectedSubjectId
+                      ? student.subjects.some((subject) => subject.id === selectedSubjectId)
+                      : false;
+                    return (
+                      <button
+                        type="button"
+                        key={student.studentId}
+                        className={`assignment-card teacher-student-card ${isFocused ? "active" : ""}`}
+                        onClick={() => setFocusedStudentId(student.studentId)}
+                      >
+                        <div className="assignment-head">
+                          <h4>{student.displayName ? student.displayName : student.email}</h4>
+                          <span className={`badge ${student.isActive ? "practice" : "assessment"}`}>
+                            {student.isActive ? "active" : "inactive"}
+                          </span>
+                        </div>
+                        <p className="assignment-meta">{student.displayName ? student.email : `Student ID: ${student.studentId}`}</p>
+                        <p className="assignment-meta">
+                          Subjects: {student.subjects.length}
+                          {selectedSubjectId ? ` | In selected subject: ${enrolledInSelected ? "yes" : "no"}` : null}
+                        </p>
+
+                        {selectedSubjectId && !enrolledInSelected ? (
+                          <div className="row-wrap" style={{ marginTop: 10 }}>
+                            <button
+                              type="button"
+                              className="button-secondary"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void enrollStudentByEmail({ email: student.email, autoAssignFuture: true });
+                              }}
+                            >
+                              Enroll to selected subject
+                            </button>
+                          </div>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {filteredStudents.length > visibleStudents.length ? (
+                <button
+                  type="button"
+                  className="button-secondary"
+                  onClick={() => setStudentLimit((current) => current + 60)}
+                >
+                  Load more ({filteredStudents.length - visibleStudents.length} remaining)
+                </button>
+              ) : null}
+            </article>
+
+            <article className="panel stack">
+              <div className="row-wrap">
+                <h4>Selected Subject</h4>
+                <span className="admin-chip">{selectedSubject?.name ?? "No subject selected"}</span>
+              </div>
+
+              {focusedStudent ? (
+                <section className="panel" style={{ background: "transparent" }}>
                   <div className="row-wrap">
-                    <button
-                      type="button"
-                      onClick={() => handleSetEnrollmentStatus(item.studentId, item.status === "active" ? "completed" : "active")}
-                    >
-                      {item.status === "active" ? "Mark Completed" : "Set Active"}
-                    </button>
-                    <label className="checkbox-row compact">
-                      <input
-                        type="checkbox"
-                        checked={item.autoAssignFuture}
-                        onChange={(event) => handleToggleAutoAssignFuture(item.studentId, event.target.checked)}
-                      />
-                      Auto future
-                    </label>
+                    <strong>
+                      {focusedStudent.displayName
+                        ? `${focusedStudent.displayName} (${focusedStudent.email})`
+                        : focusedStudent.email}
+                    </strong>
+                    <span className={`badge ${focusedStudent.isActive ? "practice" : "assessment"}`}>
+                      {focusedStudent.isActive ? "active" : "inactive"}
+                    </span>
                   </div>
-                </article>
-              ))}
-            </div>
-          )}
+                  <p className="muted" style={{ marginTop: 8 }}>
+                    Enrollments: {focusedStudent.subjects.map((subject) => `${subject.name} (${subject.status})`).join(", ")}
+                  </p>
+                  <div className="row-wrap" style={{ marginTop: 10 }}>
+                    {focusedStudent.subjects.map((subject) => (
+                      <button
+                        type="button"
+                        key={subject.id}
+                        className="button-secondary"
+                        onClick={() => setSelectedSubjectId(subject.id)}
+                      >
+                        Jump to {subject.name}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ) : (
+                <p className="muted">Select a student on the left to see details and quick navigation.</p>
+              )}
+
+              <h4>Enroll Student Into Selected Subject</h4>
+              <form onSubmit={handleEnrollStudent} className="stack">
+                <label>
+                  Student Email
+                  <input
+                    type="email"
+                    value={enrollEmail}
+                    onChange={(event) => setEnrollEmail(event.target.value)}
+                    placeholder="student@example.com"
+                  />
+                </label>
+                <label>
+                  Temporary Password (required only for new students)
+                  <input
+                    type="password"
+                    value={enrollPassword}
+                    onChange={(event) => setEnrollPassword(event.target.value)}
+                    minLength={8}
+                    placeholder="At least 8 characters"
+                  />
+                </label>
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={enrollAutoAssignFuture}
+                    onChange={(event) => setEnrollAutoAssignFuture(event.target.checked)}
+                  />
+                  Auto-assign future content for this subject
+                </label>
+                <button type="submit" disabled={!selectedSubjectId}>Enroll Student</button>
+              </form>
+
+              <h4>Students Assigned Per Subject</h4>
+              {selectedRoster.length === 0 ? (
+                <p className="muted">No students enrolled in selected subject.</p>
+              ) : (
+                <div className="assignment-grid">
+                  {selectedRoster.map((item) => (
+                    <article className="assignment-card" key={item.id}>
+                      <div className="assignment-head">
+                        <h4>
+                          {item.student.displayName
+                            ? `${item.student.displayName} (${item.student.email})`
+                            : item.student.email}
+                        </h4>
+                        <span className={`badge ${item.status === "active" ? "practice" : "assessment"}`}>
+                          {item.status}
+                        </span>
+                      </div>
+                      <p className="assignment-meta">Student ID: {item.student.id}</p>
+                      <p className="assignment-meta">
+                        Auto-assign future: {item.autoAssignFuture ? "enabled" : "disabled"}
+                      </p>
+                      <div className="row-wrap">
+                        <button
+                          type="button"
+                          onClick={() => handleSetEnrollmentStatus(item.studentId, item.status === "active" ? "completed" : "active")}
+                        >
+                          {item.status === "active" ? "Mark Completed" : "Set Active"}
+                        </button>
+                        <label className="checkbox-row compact">
+                          <input
+                            type="checkbox"
+                            checked={item.autoAssignFuture}
+                            onChange={(event) => handleToggleAutoAssignFuture(item.studentId, event.target.checked)}
+                          />
+                          Auto future
+                        </label>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </article>
+          </section>
         </section>
       ) : null}
 

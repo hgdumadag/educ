@@ -260,6 +260,10 @@ button:hover {
   box-shadow: 0 0 0 2px rgba(0, 168, 232, 0.16);
 }
 
+.teacher-student-card {
+  cursor: pointer;
+}
+
 .assignment-head {
   display: flex;
   justify-content: space-between;
