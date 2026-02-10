@@ -9,7 +9,9 @@ import type {
   TeacherListItem,
 } from "../types";
 
-const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000/api";
+// Prefer same-origin `/api` so Vite's dev proxy can handle local/LAN access cleanly.
+// Override with `VITE_API_BASE_URL` when running without the proxy (or in prod).
+const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "/api";
 const CSRF_COOKIE = "educ_csrf_token";
 
 let refreshInFlight: Promise<boolean> | null = null;
