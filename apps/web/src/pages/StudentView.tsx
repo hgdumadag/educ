@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api/client";
+import axiometryLogo from "../assets/axiometry-logo.png";
+import axiometryOpenLogo from "../assets/axiometry-open.png";
 import type { Assignment, ExamDetails } from "../types";
 
 interface SubjectGroup {
@@ -9,7 +11,39 @@ interface SubjectGroup {
   count: number;
 }
 
-export function StudentView() {
+type StudentTab = "overview" | "subjects" | "exams";
+
+interface StudentViewProps {
+  showChrome?: boolean;
+  currentUserEmail?: string;
+  currentUserRoleLabel?: string;
+  contexts?: Array<{ membershipId: string; tenantName: string; role: string }>;
+  activeMembershipId?: string;
+  loadingContext?: boolean;
+  onSwitchContext?: (membershipId: string) => void | Promise<void>;
+  onLogout?: () => void | Promise<void>;
+}
+
+export function StudentView({
+  showChrome = false,
+  currentUserEmail,
+  currentUserRoleLabel,
+  contexts,
+  activeMembershipId,
+  loadingContext,
+  onSwitchContext,
+  onLogout,
+}: StudentViewProps) {
+  const BRAND_TAGLINE = "Where learning happens, and progress is measured.";
+  const RESOURCE_ITEMS = [
+    "About Us",
+    "Help",
+    "Privacy Policy",
+    "Terms of Service",
+    "Contact Support",
+    "System Status",
+  ] as const;
+
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [selectedSubjectId, setSelectedSubjectId] = useState("");
   const [selectedExam, setSelectedExam] = useState<ExamDetails | null>(null);
@@ -19,6 +53,9 @@ export function StudentView() {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [result, setResult] = useState<unknown>(null);
   const [message, setMessage] = useState("");
+
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<StudentTab>("overview");
 
   async function refreshAssignments() {
     try {
@@ -50,7 +87,7 @@ export function StudentView() {
       }
     }
 
-    return [...map.values()];
+    return [...map.values()].sort((a, b) => a.subjectName.localeCompare(b.subjectName));
   }, [assignments]);
 
   useEffect(() => {
@@ -72,13 +109,12 @@ export function StudentView() {
     [assignments],
   );
 
-  const visibleExamAssignments = useMemo(
-    () =>
-      selectedSubjectId
-        ? examAssignments.filter((assignment) => (assignment.subject?.id ?? "unknown") === selectedSubjectId)
-        : examAssignments,
-    [examAssignments, selectedSubjectId],
-  );
+  const visibleExamAssignments = useMemo(() => {
+    if (!selectedSubjectId) {
+      return examAssignments;
+    }
+    return examAssignments.filter((assignment) => (assignment.subject?.id ?? "unknown") === selectedSubjectId);
+  }, [examAssignments, selectedSubjectId]);
 
   const selectedAssignment = useMemo(
     () => visibleExamAssignments.find((assignment) => assignment.id === selectedAssignmentId) ?? null,
@@ -103,6 +139,7 @@ export function StudentView() {
       setAnswers({});
       setAttemptId("");
       setResult(null);
+      setActiveTab("exams");
     } catch (error) {
       setMessage(String(error));
     }
@@ -117,7 +154,7 @@ export function StudentView() {
     try {
       const attempt = await api.createAttempt(selectedAssignmentId);
       setAttemptId(attempt.id);
-      setMessage(`Attempt started: ${attempt.id}`);
+      setMessage("Attempt started.");
     } catch (error) {
       setMessage(String(error));
     }
@@ -158,46 +195,89 @@ export function StudentView() {
     }
   }
 
-  return (
-    <div className="stack">
-      <section className="panel">
-        <h3>Axiometry Student Workspace</h3>
-        <p className="muted">Track your assigned subjects, complete exams, and monitor your progress.</p>
+  function switchTab(tab: StudentTab) {
+    setActiveTab(tab);
+    setMenuOpen(false);
+  }
+
+  const bottomTabs = useMemo(
+    () =>
+      [
+        { key: "overview" as const, label: "Overview" },
+        { key: "subjects" as const, label: "Subjects" },
+        { key: "exams" as const, label: "Exams" },
+      ] satisfies Array<{ key: StudentTab; label: string }>,
+    [],
+  );
+
+  const overviewPanel = (
+    <>
+      <section className="panel help-card">
+        <h3>What to do first (Student)</h3>
+        <ol className="steps">
+          <li>Open a subject and pick an assigned exam.</li>
+          <li>Click Start Attempt to begin.</li>
+          <li>Answer questions and click Autosave Responses regularly.</li>
+          <li>Submit Attempt when done, then review your result.</li>
+        </ol>
       </section>
 
-      <section className="panel">
-        <h3>Subjects</h3>
-        <p className="muted">Choose a subject to view assigned exams and continue attempts.</p>
-        {subjectGroups.length === 0 ? (
-          <p className="muted">No assigned content yet. Contact your Axiometry teacher if you expected one.</p>
-        ) : (
-          <div className="tile-grid">
-            {subjectGroups.map((group) => (
-              <button
-                key={group.subjectId}
-                type="button"
-                className={`tile-card ${group.subjectId === selectedSubjectId ? "active" : ""}`}
-                onClick={() => setSelectedSubjectId(group.subjectId)}
-              >
-                <h3>{group.subjectName}</h3>
-                <p>{group.count} assignment(s)</p>
-                <span className="tile-cta">
-                  {group.subjectId === selectedSubjectId ? "Viewing assignments below" : "Open subject"}
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
+      <section className="panel stack">
+        <h3>At a glance</h3>
+        <div className="summary-grid">
+          <article className="summary-card">
+            <h4>Subjects</h4>
+            <p>{subjectGroups.length}</p>
+          </article>
+          <article className="summary-card">
+            <h4>Exam assignments</h4>
+            <p>{examAssignments.length}</p>
+          </article>
+          <article className="summary-card">
+            <h4>Total assignments</h4>
+            <p>{assignments.length}</p>
+          </article>
+        </div>
       </section>
+    </>
+  );
 
+  const subjectsPanel = (
+    <section className="panel">
+      <h3>Subjects</h3>
+      <p className="muted">Choose a subject to view assigned exams.</p>
+      {subjectGroups.length === 0 ? (
+        <p className="muted">No assigned content yet. Contact your Axiometry teacher if you expected one.</p>
+      ) : (
+        <div className="tile-grid">
+          {subjectGroups.map((group) => (
+            <button
+              key={group.subjectId}
+              type="button"
+              className={`tile-card ${group.subjectId === selectedSubjectId ? "active" : ""}`}
+              onClick={() => {
+                setSelectedSubjectId(group.subjectId);
+                setActiveTab("exams");
+              }}
+            >
+              <h3>{group.subjectName}</h3>
+              <p>{group.count} assignment(s)</p>
+              <span className="tile-cta">Open exams</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+
+  const examsPanel = (
+    <>
       <section className="panel">
         <h3>Assigned Exams</h3>
         <p className="muted">
           Pick an exam below, start an attempt, save responses during work, then submit when finished.
         </p>
-        {visibleExamAssignments.length === 0 ? (
-          <p className="muted">No assigned exams in this subject yet.</p>
-        ) : null}
+        {visibleExamAssignments.length === 0 ? <p className="muted">No assigned exams in this subject yet.</p> : null}
         <div className="assignment-grid">
           {visibleExamAssignments.map((assignment) => {
             const isActive = assignment.id === selectedAssignmentId;
@@ -212,11 +292,11 @@ export function StudentView() {
               >
                 <div className="assignment-head">
                   <h4>{assignment.exam?.title}</h4>
-                  <span className={`badge ${assignment.assignmentType}`}>
-                    {assignment.assignmentType}
-                  </span>
+                  <span className={`badge ${assignment.assignmentType}`}>{assignment.assignmentType}</span>
                 </div>
-                <p className="muted">Source: {assignment.assignmentSource === "subject_auto" ? "Subject auto" : "Manual"}</p>
+                <p className="muted">
+                  Source: {assignment.assignmentSource === "subject_auto" ? "Subject auto" : "Manual"}
+                </p>
                 <p className="muted">Subject enrollment: {assignment.subjectEnrollmentStatus ?? "n/a"}</p>
                 <p className="assignment-meta">
                   Attempts used: {assignment.attemptsUsed}/{assignment.maxAttempts}
@@ -230,7 +310,7 @@ export function StudentView() {
       </section>
 
       {selectedExam ? (
-        <section className="panel">
+        <section className="panel stack">
           <div className="row">
             <div>
               <h3>{selectedExam.title}</h3>
@@ -239,7 +319,9 @@ export function StudentView() {
               <p className="muted">Exam ID: {selectedAssignmentExamId}</p>
             </div>
             <div>
-              <p className="muted">Answered: {answeredCount}/{totalQuestions}</p>
+              <p className="muted">
+                Answered: {answeredCount}/{totalQuestions}
+              </p>
               {selectedAssignment ? (
                 <p className="muted">
                   Attempts: {selectedAssignment.attemptsUsed}/{selectedAssignment.maxAttempts}
@@ -248,6 +330,7 @@ export function StudentView() {
             </div>
           </div>
           <p className="muted">Step 1: Start attempt. Step 2: Answer and autosave. Step 3: Submit.</p>
+
           <form onSubmit={startAttempt}>
             <button type="submit" disabled={!selectedAssignment || !!attemptId}>
               {attemptId ? "Attempt Started" : "Start Attempt"}
@@ -291,11 +374,17 @@ export function StudentView() {
             </button>
           </form>
 
-          <button onClick={submitAttempt} disabled={!attemptId}>
-            Submit Attempt
-          </button>
+          <div className="row-wrap">
+            <button type="button" onClick={() => void submitAttempt()} disabled={!attemptId}>
+              Submit Attempt
+            </button>
+          </div>
         </section>
-      ) : null}
+      ) : (
+        <section className="panel">
+          <p className="muted">Choose an exam assignment above to begin.</p>
+        </section>
+      )}
 
       {result ? (
         <section className="panel">
@@ -303,8 +392,136 @@ export function StudentView() {
           <pre>{JSON.stringify(result, null, 2)}</pre>
         </section>
       ) : null}
+    </>
+  );
 
-      {message ? <p>{message}</p> : null}
+  const mainContent = (
+    <div className={`stack ${showChrome ? "admin-main-content" : ""}`}>
+      {activeTab === "overview" ? overviewPanel : null}
+      {activeTab === "subjects" ? subjectsPanel : null}
+      {activeTab === "exams" ? examsPanel : null}
+      {message ? <p className={showChrome ? "admin-feedback success" : ""}>{message}</p> : null}
+    </div>
+  );
+
+  if (!showChrome) {
+    return <div className="stack">{mainContent}</div>;
+  }
+
+  return (
+    <div className="stack admin-dashboard admin-shell">
+      <header className="admin-top-layer">
+        <div className="admin-top-brand">
+          <div className="admin-menu-anchor">
+            <button
+              type="button"
+              className="admin-top-button admin-logo-toggle-button"
+              aria-label={menuOpen ? "Close menu" : "Open menu"}
+              onClick={() => setMenuOpen((current) => !current)}
+            >
+              <img
+                src={menuOpen ? axiometryOpenLogo : axiometryLogo}
+                alt={menuOpen ? "Axiometry open menu logo" : "Axiometry logo"}
+                className="admin-menu-toggle-logo"
+              />
+            </button>
+            {menuOpen ? (
+              <aside className="admin-quick-menu">
+                <p className="admin-quick-menu-title">Resources</p>
+                <div className="admin-quick-links">
+                  {RESOURCE_ITEMS.map((item) => (
+                    <button
+                      key={item}
+                      type="button"
+                      className="admin-menu-link"
+                      onClick={() => {
+                        setMessage(`${item} section placeholder added. We can wire this to full pages next.`);
+                        setMenuOpen(false);
+                      }}
+                    >
+                      {item}
+                    </button>
+                  ))}
+                </div>
+              </aside>
+            ) : null}
+          </div>
+          <div className="admin-brand-text">
+            <strong>Axiometry</strong>
+            <span>{BRAND_TAGLINE}</span>
+          </div>
+        </div>
+        <div className="row-wrap">
+          {currentUserRoleLabel ? <span className="admin-top-chip">{currentUserRoleLabel}</span> : null}
+          {currentUserEmail ? <span className="admin-top-chip">{currentUserEmail}</span> : null}
+          {onLogout ? (
+            <button type="button" className="admin-top-button admin-signout-button" onClick={() => void onLogout()}>
+              Sign out
+            </button>
+          ) : null}
+        </div>
+      </header>
+
+      <section className="panel admin-hero">
+        <div>
+          <p className="admin-eyebrow">Student Console</p>
+          <h2>Learn, practice, and see what you have left to finish</h2>
+          <p className="muted">Use the tabs below to move between subjects and assigned exams.</p>
+        </div>
+      </section>
+
+      {contexts && contexts.length > 1 && activeMembershipId && onSwitchContext ? (
+        <section className="panel admin-toolbar">
+          <div className="admin-toolbar-grid">
+            <label>
+              Active workspace
+              <select
+                value={activeMembershipId}
+                onChange={(event) => void onSwitchContext(event.target.value)}
+                disabled={!!loadingContext}
+              >
+                {contexts.map((context) => (
+                  <option key={context.membershipId} value={context.membershipId}>
+                    {context.tenantName} ({context.role})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Subject filter
+              <select value={selectedSubjectId} onChange={(event) => setSelectedSubjectId(event.target.value)}>
+                <option value="">All subjects</option>
+                {subjectGroups.map((group) => (
+                  <option key={group.subjectId} value={group.subjectId}>
+                    {group.subjectName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="row-wrap">
+              <button type="button" className="button-secondary" onClick={() => void refreshAssignments()}>
+                Refresh
+              </button>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {mainContent}
+
+      <nav className="admin-bottom-layer" aria-label="Student sections">
+        {bottomTabs.map((tab) => (
+          <button
+            type="button"
+            key={tab.key}
+            className={`admin-bottom-tab ${activeTab === tab.key ? "active" : ""}`}
+            onClick={() => switchTab(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }
+

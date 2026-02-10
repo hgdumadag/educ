@@ -1,9 +1,12 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api/client";
+import axiometryLogo from "../assets/axiometry-logo.png";
+import axiometryOpenLogo from "../assets/axiometry-open.png";
 import type { ExamSummary, LessonSummary, SubjectRosterItem, SubjectSummary } from "../types";
 
 type TeacherFocus = "students" | "subjects" | "lessons" | "subject_assignments" | "exams";
+type TeacherTab = "overview" | TeacherFocus;
 
 const FOCUS_ITEMS: Array<{ key: TeacherFocus; label: string; summary: string }> = [
   {
@@ -36,6 +39,14 @@ const FOCUS_ITEMS: Array<{ key: TeacherFocus; label: string; summary: string }> 
 interface TeacherViewProps {
   adminMode?: boolean;
   teacherScopeId?: string;
+  showChrome?: boolean;
+  currentUserEmail?: string;
+  currentUserRoleLabel?: string;
+  contexts?: Array<{ membershipId: string; tenantName: string; role: string }>;
+  activeMembershipId?: string;
+  loadingContext?: boolean;
+  onSwitchContext?: (membershipId: string) => void | Promise<void>;
+  onLogout?: () => void | Promise<void>;
 }
 
 interface StudentOverview {
@@ -45,7 +56,32 @@ interface StudentOverview {
   subjects: Array<{ id: string; name: string; status: "active" | "completed" }>;
 }
 
-export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewProps) {
+export function TeacherView(props: TeacherViewProps) {
+  // Note: this component is also used embedded inside the admin console. `showChrome`
+  // enables the fixed top/bottom console layout for teachers/parents/tutors.
+  const {
+    adminMode = false,
+    teacherScopeId,
+    showChrome = false,
+    currentUserEmail,
+    currentUserRoleLabel,
+    contexts,
+    activeMembershipId,
+    loadingContext,
+    onSwitchContext,
+    onLogout,
+  } = props;
+
+  const BRAND_TAGLINE = "Where learning happens, and progress is measured.";
+  const RESOURCE_ITEMS = [
+    "About Us",
+    "Help",
+    "Privacy Policy",
+    "Terms of Service",
+    "Contact Support",
+    "System Status",
+  ] as const;
+
   const [subjects, setSubjects] = useState<SubjectSummary[]>([]);
   const [selectedSubjectId, setSelectedSubjectId] = useState("");
   const [rosterBySubject, setRosterBySubject] = useState<Record<string, SubjectRosterItem[]>>({});
@@ -60,7 +96,8 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
   const [lessonFile, setLessonFile] = useState<File | null>(null);
   const [examFile, setExamFile] = useState<File | null>(null);
 
-  const [activeFocus, setActiveFocus] = useState<TeacherFocus>("students");
+  const [activeTab, setActiveTab] = useState<TeacherTab>(() => (showChrome ? "overview" : "students"));
+  const [menuOpen, setMenuOpen] = useState(false);
   const [assignmentKind, setAssignmentKind] = useState<"lesson" | "exam">("exam");
   const [assignmentItemId, setAssignmentItemId] = useState("");
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
@@ -406,6 +443,24 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
     );
   }
 
+  const teacherTabs = useMemo(
+    () =>
+      [
+        { key: "overview" as const, label: "Overview" },
+        { key: "subjects" as const, label: "Subjects" },
+        { key: "students" as const, label: "Students" },
+        { key: "lessons" as const, label: "Lessons" },
+        { key: "exams" as const, label: "Exams" },
+        { key: "subject_assignments" as const, label: "Assign" },
+      ] satisfies Array<{ key: TeacherTab; label: string }>,
+    [],
+  );
+
+  function switchTab(tab: TeacherTab) {
+    setActiveTab(tab);
+    setMenuOpen(false);
+  }
+
   if (adminMode && !teacherScopeId) {
     return (
       <section className="panel">
@@ -415,61 +470,117 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
     );
   }
 
-  return (
-    <div className="stack">
-      <section className="panel stack">
-        <h3>Axiometry Teacher Workspace</h3>
-        <p className="muted">Navigate by your top priorities and manage classroom relationships from one screen.</p>
-        <div className="focus-nav">
-          {FOCUS_ITEMS.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={`focus-pill ${activeFocus === item.key ? "active" : ""}`}
-              onClick={() => setActiveFocus(item.key)}
-            >
-              {item.label}
-            </button>
+  const workspaceHeader = (
+    <section className="panel stack">
+      <h3>Axiometry Teacher Workspace</h3>
+      <p className="muted">Navigate by your top priorities and manage classroom relationships from one screen.</p>
+      <div className="focus-nav">
+        {FOCUS_ITEMS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            className={`focus-pill ${activeTab === item.key ? "active" : ""}`}
+            onClick={() => switchTab(item.key)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+
+  const currentSubjectPanel = (
+    <section className="panel stack">
+      <div className="row-wrap">
+        <h3>Current Subject</h3>
+        <select value={selectedSubjectId} onChange={(event) => setSelectedSubjectId(event.target.value)}>
+          <option value="">Select subject</option>
+          {subjects.map((subject) => (
+            <option key={subject.id} value={subject.id}>
+              {subject.name}
+            </option>
           ))}
+        </select>
+        <button type="button" className="button-secondary" onClick={() => void refreshSubjects()}>
+          Refresh Subjects
+        </button>
+        <button type="button" className="button-secondary" onClick={() => void refreshContent()}>
+          Refresh Content
+        </button>
+        <button type="button" className="button-secondary" onClick={() => void refreshAllRosters()}>
+          Refresh Rosters
+        </button>
+      </div>
+      {selectedSubject ? (
+        <div className="summary-grid">
+          <article className="summary-card">
+            <h4>Students in Subject</h4>
+            <p>{selectedRoster.length}</p>
+          </article>
+          <article className="summary-card">
+            <h4>Lessons</h4>
+            <p>{visibleLessons.length}</p>
+          </article>
+          <article className="summary-card">
+            <h4>Exams</h4>
+            <p>{visibleExams.length}</p>
+          </article>
         </div>
+      ) : (
+        <p className="muted">Select a subject to see related students, lessons, exams, and assignments.</p>
+      )}
+    </section>
+  );
+
+  const overviewPanel = (
+    <>
+      <section className="panel help-card">
+        <h3>What to do first (Teacher)</h3>
+        <ol className="steps">
+          <li>Create one or more subjects.</li>
+          <li>Enroll students into a subject (whole-subject assignment flow).</li>
+          <li>Upload lesson ZIP and exam JSON under that subject.</li>
+          <li>Assign specific items when you need targeted work.</li>
+        </ol>
       </section>
 
       <section className="panel stack">
-        <div className="row-wrap">
-          <h3>Current Subject</h3>
-          <select
-            value={selectedSubjectId}
-            onChange={(event) => setSelectedSubjectId(event.target.value)}
-          >
-            <option value="">Select subject</option>
-            {subjects.map((subject) => (
-              <option key={subject.id} value={subject.id}>
-                {subject.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        {selectedSubject ? (
-          <div className="summary-grid">
-            <article className="summary-card">
-              <h4>Students in Subject</h4>
-              <p>{selectedRoster.length}</p>
-            </article>
-            <article className="summary-card">
-              <h4>Lessons</h4>
-              <p>{visibleLessons.length}</p>
-            </article>
-            <article className="summary-card">
-              <h4>Exams</h4>
-              <p>{visibleExams.length}</p>
-            </article>
-          </div>
+        <h3>My Subjects (Quick Pick)</h3>
+        <p className="muted">Select a subject to manage its students, lessons, exams, and assignments.</p>
+        {subjects.length === 0 ? (
+          <p className="muted">No subjects yet.</p>
         ) : (
-          <p className="muted">Select a subject to see related students, lessons, exams, and assignments.</p>
+          <div className="tile-grid">
+            {subjects.map((subject) => (
+              <button
+                type="button"
+                key={subject.id}
+                className={`tile-card ${subject.id === selectedSubjectId ? "active" : ""}`}
+                onClick={() => setSelectedSubjectId(subject.id)}
+              >
+                <h3>{subject.name}</h3>
+                <p>
+                  Students: {(rosterBySubject[subject.id] ?? []).length} | Lessons:{" "}
+                  {lessons.filter((lesson) => lesson.subject.id === subject.id).length} | Exams:{" "}
+                  {exams.filter((exam) => exam.subject.id === subject.id).length}
+                </p>
+                <span className="tile-cta">{subject.id === selectedSubjectId ? "Selected" : "Open subject"}</span>
+              </button>
+            ))}
+          </div>
         )}
       </section>
+    </>
+  );
 
-      {activeFocus === "subjects" ? (
+  const coreContent = (
+    <div className={`stack ${showChrome ? "admin-main-content" : ""}`}>
+      {!showChrome ? workspaceHeader : null}
+      {currentSubjectPanel}
+
+      {activeTab === "overview" ? overviewPanel : null}
+
+      {activeTab === "subjects" ? (
         <section className="panel stack">
           <h3>My Subjects</h3>
           <p className="muted">Create and organize subjects you manage.</p>
@@ -506,7 +617,7 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
         </section>
       ) : null}
 
-      {activeFocus === "students" ? (
+      {activeTab === "students" ? (
         <section className="panel stack">
           <h3>My Students</h3>
           <p className="muted">All students across your Axiometry subjects, plus enrollment controls for the selected subject.</p>
@@ -604,7 +715,7 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
         </section>
       ) : null}
 
-      {activeFocus === "lessons" ? (
+      {activeTab === "lessons" ? (
         <section className="panel stack">
           <h3>Lessons Per Subject</h3>
           <p className="muted">Upload new lessons and review all lessons under the selected subject.</p>
@@ -637,7 +748,7 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
         </section>
       ) : null}
 
-      {activeFocus === "exams" ? (
+      {activeTab === "exams" ? (
         <section className="panel stack">
           <h3>Exams (Practice or Assessment)</h3>
           <p className="muted">Upload exams for selected subject. Use assignment section to assign as practice or assessment.</p>
@@ -670,7 +781,7 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
         </section>
       ) : null}
 
-      {activeFocus === "subject_assignments" ? (
+      {activeTab === "subject_assignments" ? (
         <section className="panel stack">
           <h3>Students Assigned Per Subject</h3>
           <p className="muted">Assign one selected lesson/exam to selected students in this subject.</p>
@@ -751,7 +862,131 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
         </section>
       ) : null}
 
-      {message ? <p>{message}</p> : null}
+      {message ? <p className={showChrome ? "admin-feedback success" : ""}>{message}</p> : null}
+    </div>
+  );
+
+  if (!showChrome) {
+    return <div className="stack">{coreContent}</div>;
+  }
+
+  return (
+    <div className="stack admin-dashboard admin-shell">
+      <header className="admin-top-layer">
+        <div className="admin-top-brand">
+          <div className="admin-menu-anchor">
+            <button
+              type="button"
+              className="admin-top-button admin-logo-toggle-button"
+              aria-label={menuOpen ? "Close menu" : "Open menu"}
+              onClick={() => setMenuOpen((current) => !current)}
+            >
+              <img
+                src={menuOpen ? axiometryOpenLogo : axiometryLogo}
+                alt={menuOpen ? "Axiometry open menu logo" : "Axiometry logo"}
+                className="admin-menu-toggle-logo"
+              />
+            </button>
+            {menuOpen ? (
+              <aside className="admin-quick-menu">
+                <p className="admin-quick-menu-title">Resources</p>
+                <div className="admin-quick-links">
+                  {RESOURCE_ITEMS.map((item) => (
+                    <button
+                      key={item}
+                      type="button"
+                      className="admin-menu-link"
+                      onClick={() => {
+                        setMessage(`${item} section placeholder added. We can wire this to full pages next.`);
+                        setMenuOpen(false);
+                      }}
+                    >
+                      {item}
+                    </button>
+                  ))}
+                </div>
+              </aside>
+            ) : null}
+          </div>
+          <div className="admin-brand-text">
+            <strong>Axiometry</strong>
+            <span>{BRAND_TAGLINE}</span>
+          </div>
+        </div>
+        <div className="row-wrap">
+          {currentUserRoleLabel ? <span className="admin-top-chip">{currentUserRoleLabel}</span> : null}
+          {currentUserEmail ? <span className="admin-top-chip">{currentUserEmail}</span> : null}
+          {onLogout ? (
+            <button
+              type="button"
+              className="admin-top-button admin-signout-button"
+              onClick={() => void onLogout()}
+            >
+              Sign out
+            </button>
+          ) : null}
+        </div>
+      </header>
+
+      <section className="panel admin-hero">
+        <div>
+          <p className="admin-eyebrow">Teacher Console</p>
+          <h2>Manage students, subjects, lessons, and exams without losing the thread</h2>
+          <p className="muted">Use the tabs below to switch between your core tasks quickly.</p>
+        </div>
+      </section>
+
+      {contexts && contexts.length > 1 && activeMembershipId && onSwitchContext ? (
+        <section className="panel admin-toolbar">
+          <div className="admin-toolbar-grid">
+            <label>
+              Active workspace
+              <select
+                value={activeMembershipId}
+                onChange={(event) => void onSwitchContext(event.target.value)}
+                disabled={!!loadingContext}
+              >
+                {contexts.map((context) => (
+                  <option key={context.membershipId} value={context.membershipId}>
+                    {context.tenantName} ({context.role})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Jump to subject
+              <select value={selectedSubjectId} onChange={(event) => setSelectedSubjectId(event.target.value)}>
+                <option value="">Select subject</option>
+                {subjects.map((subject) => (
+                  <option key={subject.id} value={subject.id}>
+                    {subject.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="row-wrap">
+              <button type="button" className="button-secondary" onClick={() => void refreshSubjects()}>
+                Refresh
+              </button>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {coreContent}
+
+      <nav className="admin-bottom-layer" aria-label="Teacher sections">
+        {teacherTabs.map((tab) => (
+          <button
+            type="button"
+            key={tab.key}
+            className={`admin-bottom-tab ${activeTab === tab.key ? "active" : ""}`}
+            onClick={() => switchTab(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }

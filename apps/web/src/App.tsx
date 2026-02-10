@@ -12,34 +12,6 @@ import "./styles.css";
 
 const BRAND_TAGLINE = "Where learning happens, and progress is measured.";
 
-function RoleGuide({ role }: { role: MeResponse["role"] }) {
-  if (role === "teacher" || role === "parent" || role === "tutor") {
-    return (
-      <section className="panel help-card">
-        <h3>Axiometry Teacher Quickstart</h3>
-        <ol className="steps">
-          <li>Create one or more subjects.</li>
-          <li>Enroll students into a subject (creates whole-subject assignment flow).</li>
-          <li>Upload lesson ZIP and exam JSON under that subject.</li>
-          <li>Assign specific items when you need targeted work.</li>
-        </ol>
-      </section>
-    );
-  }
-
-  return (
-    <section className="panel help-card">
-      <h3>Axiometry Student Quickstart</h3>
-      <ol className="steps">
-        <li>Open one assigned exam from your list.</li>
-        <li>Click Start Attempt to begin.</li>
-        <li>Answer questions and click Autosave Responses regularly.</li>
-        <li>Click Submit Attempt when done, then review your result.</li>
-      </ol>
-    </section>
-  );
-}
-
 export function App() {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [message, setMessage] = useState("");
@@ -188,44 +160,38 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <header className="panel row">
-        <div className="brand-identity">
-          <img src={axiometryLogo} alt="Axiometry logo" className="brand-logo" />
-          <div className="brand-text">
-            <h1>Axiometry</h1>
-            <p className="brand-tagline">{BRAND_TAGLINE}</p>
-            <p>
-              {me.email} ({me.displayRole})
-            </p>
-          </div>
-        </div>
-        <button onClick={handleLogout}>Sign out</button>
-      </header>
-
-      {me.contexts.length > 1 ? (
-        <section className="panel row-wrap">
-          <label>
-            Active workspace
-            <select
-              value={me.activeContext.membershipId}
-              onChange={(event) => {
-                void handleSwitchContext(event.target.value);
-              }}
-              disabled={loading}
-            >
-              {me.contexts.map((context) => (
-                <option key={context.membershipId} value={context.membershipId}>
-                  {context.tenantName} ({context.role})
-                </option>
-              ))}
-            </select>
-          </label>
-        </section>
+      {me.role === "teacher" || me.role === "parent" || me.role === "tutor" ? (
+        <TeacherView
+          showChrome
+          currentUserEmail={me.email}
+          currentUserRoleLabel={me.displayRole}
+          contexts={me.contexts.map((context) => ({
+            membershipId: context.membershipId,
+            tenantName: context.tenantName,
+            role: context.role,
+          }))}
+          activeMembershipId={me.activeContext.membershipId}
+          loadingContext={loading}
+          onSwitchContext={handleSwitchContext}
+          onLogout={handleLogout}
+        />
       ) : null}
-
-      <RoleGuide role={me.role} />
-      {me.role === "teacher" || me.role === "parent" || me.role === "tutor" ? <TeacherView /> : null}
-      {me.role === "student" ? <StudentView /> : null}
+      {me.role === "student" ? (
+        <StudentView
+          showChrome
+          currentUserEmail={me.email}
+          currentUserRoleLabel={me.displayRole}
+          contexts={me.contexts.map((context) => ({
+            membershipId: context.membershipId,
+            tenantName: context.tenantName,
+            role: context.role,
+          }))}
+          activeMembershipId={me.activeContext.membershipId}
+          loadingContext={loading}
+          onSwitchContext={handleSwitchContext}
+          onLogout={handleLogout}
+        />
+      ) : null}
 
       {message ? <p className="error">{message}</p> : null}
     </main>

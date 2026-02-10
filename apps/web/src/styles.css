@@ -718,9 +718,10 @@ button:hover {
   bottom: 0.55rem;
   width: min(940px, calc(100vw - 1rem));
   z-index: 50;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  display: flex;
   gap: 0.25rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   background: var(--ax-primary);
   border: 1px solid #184872;
   border-radius: 12px;
@@ -729,12 +730,14 @@ button:hover {
 }
 
 .admin-bottom-tab {
+  flex: 1 0 140px;
   background: transparent;
   color: #d6ebf9;
   border: 1px solid transparent;
   border-radius: 8px;
   padding: 0.54rem 0.44rem;
   font-size: 0.84rem;
+  white-space: nowrap;
 }
 
 .admin-bottom-tab:hover {
