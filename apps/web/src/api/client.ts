@@ -242,6 +242,35 @@ export const api = {
     return request("/lessons/upload", { method: "POST", body });
   },
 
+  async importTenant(kind: string, file: File) {
+    const body = new FormData();
+    body.append("kind", kind);
+    body.append("file", file);
+    return request<{
+      ok: true;
+      kind: string;
+      tenantId: string;
+      defaultPassword: string;
+      totals: Record<string, number>;
+      warnings: string[];
+      errors: Array<{ row: number; message: string }>;
+    }>("/imports/tenant", { method: "POST", body });
+  },
+
+  async importPlatform(kind: string, file: File) {
+    const body = new FormData();
+    body.append("kind", kind);
+    body.append("file", file);
+    return request<{
+      ok: true;
+      kind: string;
+      defaultPassword: string;
+      totals: Record<string, number>;
+      warnings: string[];
+      errors: Array<{ row: number; message: string }>;
+    }>("/platform/imports", { method: "POST", body });
+  },
+
   async listLessons() {
     return request<LessonSummary[]>("/lessons", { method: "GET" });
   },

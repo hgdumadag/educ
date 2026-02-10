@@ -3,6 +3,7 @@ import { Module } from "@nestjs/common";
 import { AdminModule } from "./admin/admin.module.js";
 import { AuthModule } from "./auth/auth.module.js";
 import { ExamsModule } from "./exams/exams.module.js";
+import { ImportsModule } from "./imports/imports.module.js";
 import { LessonsModule } from "./lessons/lessons.module.js";
 import { ObservabilityModule } from "./observability/observability.module.js";
 import { OpenAiModule } from "./openai/openai.module.js";
@@ -19,6 +20,7 @@ import { TenancyModule } from "./tenancy/tenancy.module.js";
     OpenAiModule,
     AuthModule,
     TenancyModule,
+    ImportsModule,
     AdminModule,
     SubjectsModule,
     LessonsModule,

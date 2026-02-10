@@ -379,6 +379,7 @@ export class SubjectsService {
           select: {
             id: true,
             email: true,
+            displayName: true,
             isActive: true,
           },
         },
@@ -398,7 +399,7 @@ export class SubjectsService {
 
     let student = await this.prisma.user.findUnique({
       where: { email },
-      select: { id: true, email: true, isActive: true },
+      select: { id: true, email: true, displayName: true, isActive: true },
     });
 
     let createdStudent = false;
@@ -422,7 +423,7 @@ export class SubjectsService {
         select: {
           id: true,
           email: true,
-          role: true,
+          displayName: true,
           isActive: true,
         },
       });
@@ -430,19 +431,24 @@ export class SubjectsService {
       createdStudent = true;
     }
 
+    if (!student) {
+      throw new Error("Invariant failed: student missing after enrollment resolution");
+    }
+
+    const studentId = student.id;
     const autoAssignFuture = dto.autoAssignFuture ?? true;
 
     const result = await this.prisma.$transaction(async (tx) => {
       await tx.membership.upsert({
         where: {
           userId_tenantId_role: {
-            userId: student.id,
+            userId: studentId,
             tenantId: actor.activeTenantId,
             role: RoleKey.student,
           },
         },
         create: {
-          userId: student.id,
+          userId: studentId,
           tenantId: actor.activeTenantId,
           role: RoleKey.student,
           status: "active",
@@ -458,13 +464,13 @@ export class SubjectsService {
           tenantId_subjectId_studentId: {
             tenantId: actor.activeTenantId,
             subjectId,
-            studentId: student.id,
+            studentId: studentId,
           },
         },
         create: {
           tenantId: actor.activeTenantId,
           subjectId,
-          studentId: student.id,
+          studentId: studentId,
           status: "active",
           autoAssignFuture,
           enrolledByUserId: actor.id,
@@ -482,6 +488,7 @@ export class SubjectsService {
             select: {
               id: true,
               email: true,
+              displayName: true,
               isActive: true,
             },
           },
@@ -492,7 +499,7 @@ export class SubjectsService {
         tenantId: actor.activeTenantId,
         subjectId,
         enrollmentId: enrollment.id,
-        studentId: student.id,
+        studentId: studentId,
         assignedByTeacherId: subject.teacherOwnerId,
       });
 
@@ -556,6 +563,7 @@ export class SubjectsService {
           select: {
             id: true,
             email: true,
+            displayName: true,
             isActive: true,
           },
         },
@@ -591,6 +599,7 @@ export class SubjectsService {
           select: {
             id: true,
             email: true,
+            displayName: true,
             isActive: true,
           },
         },

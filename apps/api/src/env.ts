@@ -102,6 +102,7 @@ export const env = {
   uploadLocalPath: path.resolve(process.cwd(), process.env.UPLOAD_LOCAL_PATH ?? "../../data/uploads"),
   uploadMaxLessonZipBytes: readNumber("UPLOAD_MAX_LESSON_ZIP_BYTES", 10 * 1024 * 1024),
   uploadMaxExamJsonBytes: readNumber("UPLOAD_MAX_EXAM_JSON_BYTES", 2 * 1024 * 1024),
+  importMaxTabularBytes: readNumber("IMPORT_MAX_TABULAR_BYTES", 5 * 1024 * 1024),
   corsOrigins: readCsv("CORS_ORIGINS", [
     "http://localhost:5173",
     "http://127.0.0.1:5173",

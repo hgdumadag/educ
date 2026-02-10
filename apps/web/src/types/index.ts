@@ -61,6 +61,7 @@ export interface SubjectRosterItem {
   student: {
     id: string;
     email: string;
+    displayName?: string | null;
     isActive: boolean;
   };
 }

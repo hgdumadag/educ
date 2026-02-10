@@ -6,10 +6,11 @@ import axiometryOpenLogo from "../assets/axiometry-open.png";
 import type { TeacherListItem } from "../types";
 import { TeacherView } from "./TeacherView";
 
-type AdminTab = "overview" | "tenants" | "tenant_admins" | "directory" | "workspace" | "audit";
+type AdminTab = "overview" | "tenants" | "tenant_admins" | "imports" | "directory" | "workspace" | "audit";
 
 const BASE_ADMIN_TABS: Array<{ key: AdminTab; label: string }> = [
   { key: "overview", label: "Overview" },
+  { key: "imports", label: "Imports" },
   { key: "directory", label: "Directory" },
   { key: "workspace", label: "Workspace" },
   { key: "audit", label: "Audit" },
@@ -87,6 +88,7 @@ export function AdminView({
       { key: "overview", label: "Overview" },
       { key: "tenants", label: "Tenants" },
       { key: "tenant_admins", label: "Tenant Admins" },
+      { key: "imports", label: "Imports" },
       { key: "directory", label: "Directory" },
       { key: "workspace", label: "Workspace" },
       { key: "audit", label: "Audit" },
@@ -125,6 +127,16 @@ export function AdminView({
   const [resetUserEmail, setResetUserEmail] = useState<string>("");
   const [resetPassword, setResetPassword] = useState<string>("");
   const [resettingPassword, setResettingPassword] = useState(false);
+  const [importKind, setImportKind] = useState<
+    "teachers" | "subjects" | "students" | "students_subjects" | "students_subjects_lessons"
+  >("teachers");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importReport, setImportReport] = useState<unknown>(null);
+  const [platformImportKind, setPlatformImportKind] = useState<"tenants" | "tenants_school_admins">("tenants");
+  const [platformImportFile, setPlatformImportFile] = useState<File | null>(null);
+  const [platformImporting, setPlatformImporting] = useState(false);
+  const [platformImportReport, setPlatformImportReport] = useState<unknown>(null);
 
   const [teachers, setTeachers] = useState<TeacherListItem[]>([]);
   const [selectedTeacherId, setSelectedTeacherId] = useState("");
@@ -947,6 +959,229 @@ export function AdminView({
                 </form>
               ) : (
                 <p className="muted">No user selected.</p>
+              )}
+            </article>
+          </section>
+        ) : null}
+
+        {activeTab === "imports" ? (
+          <section className="admin-layout-grid">
+            <article className="panel stack">
+              <div className="row-wrap">
+                <h3>Tenant Imports</h3>
+                <span className="admin-chip">CSV / Excel</span>
+              </div>
+              <p className="muted">
+                Bulk upload directory data for the currently scoped tenant. Default password for new users when password is blank:{" "}
+                <strong>ChangeMe!23</strong>
+              </p>
+              <p className="muted">
+                Current scope:{" "}
+                <strong>{scopedInstitution?.name ?? "Tenant"}</strong>{" "}
+                {scopedInstitution?.slug ? <>(<code>{scopedInstitution.slug}</code>)</> : null}{" "}
+                <span className="muted">tenantId</span>: <code>{tenantScopeId}</code>
+              </p>
+
+              {isPlatformAdmin ? (
+                <label>
+                  Tenant scope
+                  <select value={tenantScopeId} onChange={(event) => setTenantScopeId(event.target.value)}>
+                    {institutions.map((institution) => (
+                      <option key={institution.id} value={institution.id}>
+                        {institution.name} ({institution.slug})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+
+              <details className="admin-guide-panel">
+                <summary>Templates (required headers)</summary>
+                <div className="stack" style={{ marginTop: 10 }}>
+                  <div className="panel" style={{ background: "transparent" }}>
+                    <strong>teachers</strong>
+                    <p className="muted">Create teacher accounts in this tenant.</p>
+                    <pre>teacher_email, teacher_name, teacher_password</pre>
+                  </div>
+                  <div className="panel" style={{ background: "transparent" }}>
+                    <strong>subjects</strong>
+                    <p className="muted">
+                      School admin must include <code>teacher_email</code> so subjects have an owner.
+                    </p>
+                    <pre>teacher_email, subject_name</pre>
+                  </div>
+                  <div className="panel" style={{ background: "transparent" }}>
+                    <strong>students</strong>
+                    <p className="muted">Create student accounts (not enrolled).</p>
+                    <pre>student_email, student_name, student_password</pre>
+                  </div>
+                  <div className="panel" style={{ background: "transparent" }}>
+                    <strong>students_subjects</strong>
+                    <p className="muted">
+                      Enroll students into an existing subject (subject must already exist).
+                    </p>
+                    <pre>teacher_email, subject_name, student_email, student_name, student_password, auto_assign_future</pre>
+                  </div>
+                  <div className="panel" style={{ background: "transparent" }}>
+                    <strong>students_subjects_lessons</strong>
+                    <p className="muted">
+                      Create subject if missing, enroll student, and create lesson(s). Use one row per lesson.
+                    </p>
+                    <pre>teacher_email, subject_name, student_email, student_name, student_password, lesson_title, lesson_grade_level, lesson_content_md, auto_assign_future</pre>
+                  </div>
+                </div>
+              </details>
+
+              <form
+                className="stack"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!importFile) {
+                    setMessageTone("error");
+                    setMessage("Select a CSV or Excel file to import.");
+                    return;
+                  }
+
+                  void (async () => {
+                    setImporting(true);
+                    setImportReport(null);
+                    setMessage("");
+                    try {
+                      const report = await api.importTenant(importKind, importFile);
+                      setImportReport(report);
+                      setMessageTone("success");
+                      setMessage("Import completed.");
+                      await refreshTeachers();
+                      await loadAudit();
+                    } catch (error) {
+                      setMessageTone("error");
+                      setMessage(String(error));
+                    } finally {
+                      setImporting(false);
+                    }
+                  })();
+                }}
+              >
+                <label>
+                  Import type
+                  <select value={importKind} onChange={(event) => setImportKind(event.target.value as typeof importKind)}>
+                    <option value="teachers">Teachers only</option>
+                    <option value="subjects">Subjects only</option>
+                    <option value="students">Students only</option>
+                    <option value="students_subjects">Students with Subjects</option>
+                    <option value="students_subjects_lessons">Students, Subjects and Lessons</option>
+                  </select>
+                </label>
+
+                <label>
+                  CSV / Excel file
+                  <input
+                    type="file"
+                    accept=".csv,.xlsx,.xls"
+                    onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
+                  />
+                </label>
+
+                <button type="submit" disabled={importing}>
+                  {importing ? "Importing..." : "Run Import"}
+                </button>
+              </form>
+
+              {importReport ? (
+                <section className="panel">
+                  <h4>Import Report</h4>
+                  <pre>{JSON.stringify(importReport, null, 2)}</pre>
+                </section>
+              ) : null}
+            </article>
+
+            <article className="panel stack">
+              <h3>Platform Imports</h3>
+              {isPlatformAdmin ? (
+                <>
+                  <p className="muted">Create tenants and tenant admins across the platform.</p>
+
+                  <details className="admin-guide-panel">
+                    <summary>Templates (required headers)</summary>
+                    <div className="stack" style={{ marginTop: 10 }}>
+                      <div className="panel" style={{ background: "transparent" }}>
+                        <strong>tenants</strong>
+                        <p className="muted">Create institution tenants.</p>
+                        <pre>tenant_name, tenant_slug, tenant_domain, tenant_country</pre>
+                      </div>
+                      <div className="panel" style={{ background: "transparent" }}>
+                        <strong>tenants_school_admins</strong>
+                        <p className="muted">Create institution tenants and a school admin membership per row.</p>
+                        <pre>tenant_name, tenant_slug, tenant_domain, tenant_country, school_admin_email, school_admin_name, school_admin_password</pre>
+                      </div>
+                    </div>
+                  </details>
+
+                  <form
+                    className="stack"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      if (!platformImportFile) {
+                        setMessageTone("error");
+                        setMessage("Select a CSV or Excel file to import.");
+                        return;
+                      }
+
+                      void (async () => {
+                        setPlatformImporting(true);
+                        setPlatformImportReport(null);
+                        setMessage("");
+                        try {
+                          const report = await api.importPlatform(platformImportKind, platformImportFile);
+                          setPlatformImportReport(report);
+                          setMessageTone("success");
+                          setMessage("Platform import completed.");
+                          await refreshInstitutions();
+                        } catch (error) {
+                          setMessageTone("error");
+                          setMessage(String(error));
+                        } finally {
+                          setPlatformImporting(false);
+                        }
+                      })();
+                    }}
+                  >
+                    <label>
+                      Import type
+                      <select
+                        value={platformImportKind}
+                        onChange={(event) =>
+                          setPlatformImportKind(event.target.value as typeof platformImportKind)
+                        }
+                      >
+                        <option value="tenants">Tenants only</option>
+                        <option value="tenants_school_admins">Tenants + School Admin</option>
+                      </select>
+                    </label>
+
+                    <label>
+                      CSV / Excel file
+                      <input
+                        type="file"
+                        accept=".csv,.xlsx,.xls"
+                        onChange={(event) => setPlatformImportFile(event.target.files?.[0] ?? null)}
+                      />
+                    </label>
+
+                    <button type="submit" disabled={platformImporting}>
+                      {platformImporting ? "Importing..." : "Run Platform Import"}
+                    </button>
+                  </form>
+
+                  {platformImportReport ? (
+                    <section className="panel">
+                      <h4>Platform Import Report</h4>
+                      <pre>{JSON.stringify(platformImportReport, null, 2)}</pre>
+                    </section>
+                  ) : null}
+                </>
+              ) : (
+                <p className="muted">Platform imports are available only for SuperAdmin.</p>
               )}
             </article>
           </section>

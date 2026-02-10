@@ -108,7 +108,7 @@ export class AdminService {
           },
         },
       },
-      select: { id: true, email: true, role: true, isActive: true, createdAt: true },
+      select: { id: true, email: true, displayName: true, role: true, isActive: true, createdAt: true },
     });
 
     await recordAuditEvent(this.prisma, {
@@ -143,6 +143,7 @@ export class AdminService {
           select: {
             id: true,
             email: true,
+            displayName: true,
             role: true,
             isActive: true,
             createdAt: true,
@@ -191,7 +192,7 @@ export class AdminService {
       const user = await tx.user.update({
         where: { id: userId },
         data: updateData,
-        select: { id: true, email: true, role: true, isActive: true, updatedAt: true },
+        select: { id: true, email: true, displayName: true, role: true, isActive: true, updatedAt: true },
       });
 
       if (dto.role !== undefined) {

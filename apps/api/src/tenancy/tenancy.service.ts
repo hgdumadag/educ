@@ -217,7 +217,7 @@ export class TenancyService {
     const result = await this.prisma.$transaction(async (tx) => {
       let user = await tx.user.findUnique({
         where: { email },
-        select: { id: true, email: true, isActive: true },
+        select: { id: true, email: true, displayName: true, isActive: true },
       });
 
       if (!user) {
@@ -235,6 +235,7 @@ export class TenancyService {
           select: {
             id: true,
             email: true,
+            displayName: true,
             isActive: true,
           },
         });
@@ -302,6 +303,7 @@ export class TenancyService {
           select: {
             id: true,
             email: true,
+            displayName: true,
             role: true,
             isActive: true,
           },
@@ -327,6 +329,7 @@ export class TenancyService {
         select: {
           id: true,
           email: true,
+          displayName: true,
           role: true,
           isActive: true,
         },
@@ -347,6 +350,7 @@ export class TenancyService {
           select: {
             id: true,
             email: true,
+            displayName: true,
             role: true,
             isActive: true,
           },

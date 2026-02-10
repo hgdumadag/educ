@@ -6,7 +6,7 @@ import axiometryOpenLogo from "../assets/axiometry-open.png";
 import type { ExamSummary, LessonSummary, SubjectRosterItem, SubjectSummary } from "../types";
 
 type TeacherFocus = "students" | "subjects" | "lessons" | "subject_assignments" | "exams";
-type TeacherTab = "overview" | TeacherFocus;
+type TeacherTab = "overview" | "import" | TeacherFocus;
 
 const FOCUS_ITEMS: Array<{ key: TeacherFocus; label: string; summary: string }> = [
   {
@@ -52,6 +52,7 @@ interface TeacherViewProps {
 interface StudentOverview {
   studentId: string;
   email: string;
+  displayName?: string | null;
   isActive: boolean;
   subjects: Array<{ id: string; name: string; status: "active" | "completed" }>;
 }
@@ -105,6 +106,10 @@ export function TeacherView(props: TeacherViewProps) {
   const [maxAttempts, setMaxAttempts] = useState("");
 
   const [message, setMessage] = useState("");
+  const [importKind, setImportKind] = useState<"subjects" | "students" | "students_subjects" | "students_subjects_lessons">("subjects");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importReport, setImportReport] = useState<unknown>(null);
 
   const selectedSubject = useMemo(
     () => subjects.find((subject) => subject.id === selectedSubjectId) ?? null,
@@ -143,6 +148,7 @@ export function TeacherView(props: TeacherViewProps) {
           map.set(enrollment.studentId, {
             studentId: enrollment.studentId,
             email: enrollment.student.email,
+            displayName: enrollment.student.displayName ?? null,
             isActive: enrollment.student.isActive,
             subjects: [subjectInfo],
           });
@@ -452,6 +458,7 @@ export function TeacherView(props: TeacherViewProps) {
         { key: "lessons" as const, label: "Lessons" },
         { key: "exams" as const, label: "Exams" },
         { key: "subject_assignments" as const, label: "Assign" },
+        { key: "import" as const, label: "Import" },
       ] satisfies Array<{ key: TeacherTab; label: string }>,
     [],
   );
@@ -629,7 +636,9 @@ export function TeacherView(props: TeacherViewProps) {
               allStudents.map((student) => (
                 <article key={student.studentId} className="assignment-card">
                   <div className="assignment-head">
-                    <h4>{student.email}</h4>
+                    <h4>
+                      {student.displayName ? `${student.displayName} (${student.email})` : student.email}
+                    </h4>
                     <span className={`badge ${student.isActive ? "practice" : "assessment"}`}>
                       {student.isActive ? "active" : "inactive"}
                     </span>
@@ -683,7 +692,11 @@ export function TeacherView(props: TeacherViewProps) {
               {selectedRoster.map((item) => (
                 <article className="assignment-card" key={item.id}>
                   <div className="assignment-head">
-                    <h4>{item.student.email}</h4>
+                    <h4>
+                      {item.student.displayName
+                        ? `${item.student.displayName} (${item.student.email})`
+                        : item.student.email}
+                    </h4>
                     <span className={`badge ${item.status === "active" ? "practice" : "assessment"}`}>
                       {item.status}
                     </span>
@@ -859,6 +872,105 @@ export function TeacherView(props: TeacherViewProps) {
 
             <button type="submit" disabled={!selectedSubjectId}>Assign Selected Content</button>
           </form>
+        </section>
+      ) : null}
+
+      {activeTab === "import" ? (
+        <section className="panel stack">
+          <h3>Bulk Upload (CSV / Excel)</h3>
+          <p className="muted">
+            Upload CSV or Excel (.xlsx) to create subjects, students, enrollments, and lessons quickly.
+          </p>
+          <p className="muted">
+            Default password for new users when password is blank: <strong>ChangeMe!23</strong>
+          </p>
+
+          <details className="admin-guide-panel">
+            <summary>Templates (required headers)</summary>
+            <div className="stack" style={{ marginTop: 10 }}>
+              <div className="panel" style={{ background: "transparent" }}>
+                <strong>subjects</strong>
+                <p className="muted">Create subjects owned by you.</p>
+                <pre>subject_name</pre>
+              </div>
+              <div className="panel" style={{ background: "transparent" }}>
+                <strong>students</strong>
+                <p className="muted">Create student accounts (not enrolled).</p>
+                <pre>student_email, student_name, student_password</pre>
+              </div>
+              <div className="panel" style={{ background: "transparent" }}>
+                <strong>students_subjects</strong>
+                <p className="muted">Enroll students into an existing subject (subject must already exist).</p>
+                <pre>student_email, student_name, student_password, subject_name, auto_assign_future</pre>
+              </div>
+              <div className="panel" style={{ background: "transparent" }}>
+                <strong>students_subjects_lessons</strong>
+                <p className="muted">
+                  Create subject if missing, enroll student, and create lesson(s). Use one row per lesson.
+                </p>
+                <pre>student_email, student_name, student_password, subject_name, lesson_title, lesson_grade_level, lesson_content_md, auto_assign_future</pre>
+              </div>
+            </div>
+          </details>
+
+          <form
+            className="stack"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!importFile) {
+                setMessage("Select a CSV or Excel file to import.");
+                return;
+              }
+
+              void (async () => {
+                setImporting(true);
+                setMessage("");
+                setImportReport(null);
+                try {
+                  const report = await api.importTenant(importKind, importFile);
+                  setImportReport(report);
+                  setMessage("Import completed.");
+                  await refreshSubjects();
+                  await refreshContent();
+                  await refreshAllRosters();
+                } catch (error) {
+                  setMessage(String(error));
+                } finally {
+                  setImporting(false);
+                }
+              })();
+            }}
+          >
+            <label>
+              Import type
+              <select value={importKind} onChange={(event) => setImportKind(event.target.value as typeof importKind)}>
+                <option value="subjects">Subjects only</option>
+                <option value="students">Students only</option>
+                <option value="students_subjects">Students with Subjects</option>
+                <option value="students_subjects_lessons">Students, Subjects and Lessons</option>
+              </select>
+            </label>
+
+            <label>
+              CSV / Excel file
+              <input
+                type="file"
+                accept=".csv,.xlsx,.xls"
+                onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
+              />
+            </label>
+
+            <button type="submit" disabled={importing}>
+              {importing ? "Importing..." : "Run Import"}
+            </button>
+          </form>
+
+          {importReport ? (
+            <section className="panel">
+              <h4>Import Report</h4>
+              <pre>{JSON.stringify(importReport, null, 2)}</pre>
+            </section>
+          ) : null}
         </section>
       ) : null}
 
