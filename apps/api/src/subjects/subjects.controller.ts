@@ -25,7 +25,7 @@ import { SubjectsService } from "./subjects.service.js";
 
 @Controller("subjects")
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(RoleKey.teacher, RoleKey.admin)
+@Roles(RoleKey.school_admin, RoleKey.teacher, RoleKey.parent, RoleKey.tutor)
 export class SubjectsController {
   constructor(@Inject(SubjectsService) private readonly subjectsService: SubjectsService) {}
 

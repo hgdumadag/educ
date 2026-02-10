@@ -161,10 +161,15 @@ export function StudentView() {
   return (
     <div className="stack">
       <section className="panel">
+        <h3>Axiometry Student Workspace</h3>
+        <p className="muted">Track your assigned subjects, complete exams, and monitor your progress.</p>
+      </section>
+
+      <section className="panel">
         <h3>Subjects</h3>
         <p className="muted">Choose a subject to view assigned exams and continue attempts.</p>
         {subjectGroups.length === 0 ? (
-          <p className="muted">No assigned content yet. Contact your teacher if you expected one.</p>
+          <p className="muted">No assigned content yet. Contact your Axiometry teacher if you expected one.</p>
         ) : (
           <div className="tile-grid">
             {subjectGroups.map((group) => (

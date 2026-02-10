@@ -13,6 +13,7 @@ const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000/api"
 const CSRF_COOKIE = "educ_csrf_token";
 
 let refreshInFlight: Promise<boolean> | null = null;
+let tenantScopeId: string | null = null;
 
 function isMutatingMethod(method: string): boolean {
   const normalized = method.toUpperCase();
@@ -81,12 +82,23 @@ async function request<T>(
     }
   }
 
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...options,
-    method,
-    credentials: "include",
-    headers,
-  });
+  if (tenantScopeId) {
+    headers.set("x-tenant-id", tenantScopeId);
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      ...options,
+      method,
+      credentials: "include",
+      headers,
+    });
+  } catch {
+    throw new Error(
+      `Unable to reach the API at ${baseUrl}. Start the backend server (npm run dev --workspace @educ/api) and try again.`,
+    );
+  }
 
   if (response.status === 401 && shouldRetry && path !== "/auth/login" && path !== "/auth/refresh") {
     const refreshed = await tryRefresh();
@@ -107,6 +119,10 @@ async function request<T>(
 }
 
 export const api = {
+  setTenantScope(tenantId: string | null): void {
+    tenantScopeId = tenantId?.trim() ? tenantId.trim() : null;
+  },
+
   async login(identifier: string, password: string): Promise<{ user: MeResponse }> {
     return request<{ user: MeResponse }>("/auth/login", {
       method: "POST",
@@ -122,16 +138,30 @@ export const api = {
     await request("/auth/logout", { method: "POST" });
   },
 
-  async createUser(payload: { email: string; password: string; role: "teacher" | "student" }) {
+  async switchContext(membershipId: string): Promise<{ user: MeResponse }> {
+    return request<{ user: MeResponse }>("/auth/switch-context", {
+      method: "POST",
+      body: JSON.stringify({ membershipId }),
+    });
+  },
+
+  async createUser(payload: { email: string; password: string; role: "teacher" | "student" | "parent" | "tutor" }) {
     return request("/admin/users", {
       method: "POST",
       body: JSON.stringify(payload),
     });
   },
 
-  async listUsers(role?: "teacher" | "student" | "admin") {
+  async resetUserPassword(userId: string, password: string) {
+    return request(`/admin/users/${userId}/reset-password`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    });
+  },
+
+  async listUsers(role?: "teacher" | "student" | "school_admin" | "parent" | "tutor") {
     const suffix = role ? `?role=${encodeURIComponent(role)}` : "";
-    return request<Array<{ id: string; email: string; role: "teacher" | "student" | "admin"; isActive: boolean; createdAt: string }>>(
+    return request<Array<{ id: string; email: string; role: "teacher" | "student" | "school_admin" | "parent" | "tutor"; isActive: boolean; createdAt: string }>>(
       `/admin/users${suffix}`,
       { method: "GET" },
     );
@@ -281,5 +311,97 @@ export const api = {
 
   async attemptResult(attemptId: string) {
     return request(`/attempts/${attemptId}/result`, { method: "GET" });
+  },
+
+  async createInstitution(payload: {
+    name: string;
+    slug?: string;
+    legalName?: string;
+    domain?: string;
+    country?: string;
+  }) {
+    return request("/platform/institutions", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async listInstitutions() {
+    return request("/platform/institutions", { method: "GET" });
+  },
+
+  async updateInstitution(
+    institutionId: string,
+    payload: {
+      name?: string;
+      slug?: string;
+      legalName?: string;
+      domain?: string;
+      country?: string;
+      status?: "active" | "suspended" | "archived";
+    },
+  ) {
+    return request(`/platform/institutions/${institutionId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async addInstitutionAdmin(
+    institutionId: string,
+    payload: { email: string; temporaryPassword?: string },
+  ) {
+    return request(`/platform/institutions/${institutionId}/admins`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async listMemberships(tenantId: string) {
+    return request(`/tenants/${tenantId}/memberships`, { method: "GET" });
+  },
+
+  async createMembership(
+    tenantId: string,
+    payload: { email: string; role: "school_admin" | "teacher" | "student" | "parent" | "tutor"; temporaryPassword?: string },
+  ) {
+    return request(`/tenants/${tenantId}/memberships`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async updateMembership(
+    tenantId: string,
+    membershipId: string,
+    payload: { role?: "school_admin" | "teacher" | "student" | "parent" | "tutor"; status?: "active" | "invited" | "disabled" },
+  ) {
+    return request(`/tenants/${tenantId}/memberships/${membershipId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async createBillingAccount(payload: { ownerType: "tenant" | "user"; ownerId: string; plan: string }) {
+    return request("/billing/accounts", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async createSubscription(payload: {
+    billingAccountId: string;
+    currentPeriodStart: string;
+    currentPeriodEnd: string;
+    cancelAtPeriodEnd?: boolean;
+  }) {
+    return request("/billing/subscriptions", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getBillingAccount(billingAccountId: string) {
+    return request(`/billing/accounts/${billingAccountId}`, { method: "GET" });
   },
 };

@@ -8,9 +8,29 @@ datasource db {
 }
 
 enum RoleKey {
-  admin
+  platform_admin
+  school_admin
   teacher
   student
+  parent
+  tutor
+}
+
+enum TenantType {
+  institution
+  individual
+}
+
+enum TenantStatus {
+  active
+  suspended
+  archived
+}
+
+enum MembershipStatus {
+  active
+  invited
+  disabled
 }
 
 enum AttemptStatus {
@@ -35,29 +55,127 @@ enum AssignmentSource {
   subject_auto
 }
 
+enum BillingOwnerType {
+  tenant
+  user
+}
+
+enum BillingAccountStatus {
+  active
+  trialing
+  past_due
+  canceled
+}
+
+enum SubscriptionStatus {
+  active
+  trialing
+  past_due
+  canceled
+  incomplete
+}
+
 model User {
   id               String   @id @default(cuid())
   email            String   @unique
   passwordHash     String
   role             RoleKey
+  isPlatformAdmin  Boolean  @default(false)
   isActive         Boolean  @default(true)
   refreshTokenHash String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  uploadedLessons      Lesson[]            @relation("lesson_uploader")
-  uploadedExams        Exam[]              @relation("exam_uploader")
-  ownedSubjects        Subject[]           @relation("subject_owner")
-  subjectEnrollments   SubjectEnrollment[] @relation("enrollment_student")
-  createdEnrollments   SubjectEnrollment[] @relation("enrollment_actor")
-  completedEnrollments SubjectEnrollment[] @relation("enrollment_completed_actor")
-  studentAssignments   Assignment[]        @relation("assignment_student")
-  teacherAssignments   Assignment[]        @relation("assignment_teacher")
-  attempts             Attempt[]           @relation("attempt_student")
-  auditEvents          AuditEvent[]        @relation("audit_actor")
-  updatedRoleLabels    RoleLabel[]         @relation("role_label_updater")
+  memberships                Membership[]          @relation("membership_user")
+  invitedMemberships         Membership[]          @relation("membership_inviter")
+  ownedIndividualProfiles    IndividualProfile[]   @relation("individual_owner")
+  uploadedLessons            Lesson[]              @relation("lesson_uploader")
+  uploadedExams              Exam[]                @relation("exam_uploader")
+  ownedSubjects              Subject[]             @relation("subject_owner")
+  subjectEnrollments         SubjectEnrollment[]   @relation("enrollment_student")
+  createdEnrollments         SubjectEnrollment[]   @relation("enrollment_actor")
+  completedEnrollments       SubjectEnrollment[]   @relation("enrollment_completed_actor")
+  studentAssignments         Assignment[]          @relation("assignment_student")
+  teacherAssignments         Assignment[]          @relation("assignment_teacher")
+  attempts                   Attempt[]             @relation("attempt_student")
+  auditEvents                AuditEvent[]          @relation("audit_actor")
+  updatedRoleLabels          RoleLabel[]           @relation("role_label_updater")
+  learnerGuardianLinksParent LearnerGuardianLink[] @relation("guardian_parent")
+  learnerGuardianLinksChild  LearnerGuardianLink[] @relation("guardian_student")
+  billingAccounts            BillingAccount[]      @relation("billing_user")
 
   @@index([role, isActive])
+  @@index([isPlatformAdmin, isActive])
+}
+
+model Tenant {
+  id        String       @id @default(cuid())
+  type      TenantType
+  name      String
+  slug      String       @unique
+  status    TenantStatus @default(active)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  institutionProfile InstitutionProfile?
+  individualProfile  IndividualProfile?
+  memberships        Membership[]
+  subjects           Subject[]
+  subjectEnrollments SubjectEnrollment[]
+  lessons            Lesson[]
+  exams              Exam[]
+  assignments        Assignment[]
+  attempts           Attempt[]
+  auditEvents        AuditEvent[]
+  learnerLinks       LearnerGuardianLink[]
+  billingAccounts    BillingAccount[]
+
+  @@index([type, status, createdAt])
+}
+
+model InstitutionProfile {
+  tenantId  String   @id
+  legalName String?
+  domain    String?
+  country   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model IndividualProfile {
+  tenantId     String   @id
+  ownerUserId  String
+  displayLabel String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  owner  User   @relation("individual_owner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+
+  @@index([ownerUserId])
+}
+
+model Membership {
+  id          String           @id @default(cuid())
+  userId      String
+  tenantId    String
+  role        RoleKey
+  status      MembershipStatus @default(active)
+  invitedById String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  user        User         @relation("membership_user", fields: [userId], references: [id], onDelete: Cascade)
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invitedBy   User?        @relation("membership_inviter", fields: [invitedById], references: [id], onDelete: SetNull)
+  auditEvents AuditEvent[]
+
+  @@unique([userId, tenantId, role])
+  @@index([tenantId, role, status])
+  @@index([userId, status])
+  @@index([tenantId, userId])
 }
 
 model RoleLabel {
@@ -71,6 +189,7 @@ model RoleLabel {
 
 model Subject {
   id             String   @id @default(cuid())
+  tenantId       String
   teacherOwnerId String
   name           String
   nameNormalized String
@@ -78,17 +197,19 @@ model Subject {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   teacherOwner User                @relation("subject_owner", fields: [teacherOwnerId], references: [id], onDelete: Restrict)
   lessons      Lesson[]
   exams        Exam[]
   enrollments  SubjectEnrollment[]
 
-  @@unique([teacherOwnerId, nameNormalized])
-  @@index([teacherOwnerId, isArchived, createdAt])
+  @@unique([tenantId, teacherOwnerId, nameNormalized])
+  @@index([tenantId, teacherOwnerId, isArchived, createdAt])
 }
 
 model SubjectEnrollment {
   id                String           @id @default(cuid())
+  tenantId          String
   subjectId         String
   studentId         String
   status            EnrollmentStatus @default(active)
@@ -99,19 +220,21 @@ model SubjectEnrollment {
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   subject     Subject      @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   student     User         @relation("enrollment_student", fields: [studentId], references: [id], onDelete: Cascade)
   enrolledBy  User         @relation("enrollment_actor", fields: [enrolledByUserId], references: [id], onDelete: Restrict)
   completedBy User?        @relation("enrollment_completed_actor", fields: [completedByUserId], references: [id], onDelete: SetNull)
   assignments Assignment[]
 
-  @@unique([subjectId, studentId])
-  @@index([subjectId, status])
-  @@index([studentId, status])
+  @@unique([tenantId, subjectId, studentId])
+  @@index([tenantId, subjectId, status])
+  @@index([tenantId, studentId, status])
 }
 
 model Lesson {
   id           String   @id @default(cuid())
+  tenantId     String
   title        String
   gradeLevel   String?
   subject      String
@@ -123,15 +246,17 @@ model Lesson {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   subjectRef  Subject      @relation(fields: [subjectId], references: [id], onDelete: Restrict)
   uploadedBy  User         @relation("lesson_uploader", fields: [uploadedById], references: [id], onDelete: Restrict)
   assignments Assignment[]
 
-  @@index([subjectId, createdAt])
+  @@index([tenantId, subjectId, createdAt])
 }
 
 model Exam {
   id                      String   @id @default(cuid())
+  tenantId                String
   title                   String
   subject                 String
   subjectId               String
@@ -143,16 +268,18 @@ model Exam {
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   subjectRef  Subject      @relation(fields: [subjectId], references: [id], onDelete: Restrict)
   uploadedBy  User         @relation("exam_uploader", fields: [uploadedById], references: [id], onDelete: Restrict)
   assignments Assignment[]
   attempts    Attempt[]
 
-  @@index([subjectId, createdAt])
+  @@index([tenantId, subjectId, createdAt])
 }
 
 model Assignment {
   id                  String           @id @default(cuid())
+  tenantId            String
   assigneeStudentId   String
   assignedByTeacherId String
   lessonId            String?
@@ -164,6 +291,7 @@ model Assignment {
   dueAt               DateTime?
   createdAt           DateTime         @default(now())
 
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   assigneeStudent   User               @relation("assignment_student", fields: [assigneeStudentId], references: [id], onDelete: Cascade)
   assignedByTeacher User               @relation("assignment_teacher", fields: [assignedByTeacherId], references: [id], onDelete: Restrict)
   lesson            Lesson?            @relation(fields: [lessonId], references: [id], onDelete: Cascade)
@@ -171,12 +299,13 @@ model Assignment {
   subjectEnrollment SubjectEnrollment? @relation(fields: [subjectEnrollmentId], references: [id], onDelete: SetNull)
   attempts          Attempt[]
 
-  @@index([assigneeStudentId, dueAt])
-  @@index([subjectEnrollmentId])
+  @@index([tenantId, assigneeStudentId, dueAt])
+  @@index([tenantId, subjectEnrollmentId])
 }
 
 model Attempt {
   id                 String        @id @default(cuid())
+  tenantId           String
   assignmentId       String
   examId             String
   studentId          String
@@ -186,13 +315,14 @@ model Attempt {
   scorePercent       Int?
   gradingSummaryJson Json?
 
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
   exam       Exam       @relation(fields: [examId], references: [id], onDelete: Cascade)
   student    User       @relation("attempt_student", fields: [studentId], references: [id], onDelete: Cascade)
   responses  Response[]
 
-  @@index([studentId, examId, status])
-  @@index([assignmentId, status])
+  @@index([tenantId, studentId, examId, status])
+  @@index([tenantId, assignmentId, status])
 }
 
 model Response {
@@ -213,13 +343,73 @@ model Response {
 model AuditEvent {
   id           String   @id @default(cuid())
   actorUserId  String
+  tenantId     String?
+  membershipId String?
+  contextRole  RoleKey?
   action       String
   entityType   String
   entityId     String?
   metadataJson Json?
   createdAt    DateTime @default(now())
 
-  actor User @relation("audit_actor", fields: [actorUserId], references: [id], onDelete: Cascade)
+  actor      User        @relation("audit_actor", fields: [actorUserId], references: [id], onDelete: Cascade)
+  tenant     Tenant?     @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  membership Membership? @relation(fields: [membershipId], references: [id], onDelete: SetNull)
 
+  @@index([tenantId, createdAt])
   @@index([actorUserId, createdAt])
+}
+
+model LearnerGuardianLink {
+  id               String   @id @default(cuid())
+  tenantId         String
+  parentUserId     String
+  studentUserId    String
+  canAssignContent Boolean  @default(true)
+  canViewProgress  Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant  Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parent  User   @relation("guardian_parent", fields: [parentUserId], references: [id], onDelete: Cascade)
+  student User   @relation("guardian_student", fields: [studentUserId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, parentUserId, studentUserId])
+  @@index([tenantId, parentUserId])
+  @@index([tenantId, studentUserId])
+}
+
+model BillingAccount {
+  id        String               @id @default(cuid())
+  ownerType BillingOwnerType
+  ownerId   String
+  tenantId  String?
+  userId    String?
+  plan      String
+  status    BillingAccountStatus @default(active)
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  tenant        Tenant?        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user          User?          @relation("billing_user", fields: [userId], references: [id], onDelete: Cascade)
+  subscriptions Subscription[]
+
+  @@unique([ownerType, ownerId])
+  @@index([tenantId, status])
+  @@index([userId, status])
+}
+
+model Subscription {
+  id                 String             @id @default(cuid())
+  billingAccountId   String
+  status             SubscriptionStatus @default(active)
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd  Boolean            @default(false)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  billingAccount BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+
+  @@index([billingAccountId, status])
 }

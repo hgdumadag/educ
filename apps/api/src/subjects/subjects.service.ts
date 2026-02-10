@@ -8,11 +8,12 @@ import {
 } from "@nestjs/common";
 import { Prisma, RoleKey } from "@prisma/client";
 
+import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
+import { isContentManagerRole } from "../common/authz/roles.js";
 import { ObservabilityService } from "../observability/observability.service.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { recordAuditEvent } from "../utils/audit.js";
 import { hashPassword } from "../utils/password.js";
-import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
 import type { CreateSubjectDto } from "./dto/create-subject.dto.js";
 import type { EnrollSubjectStudentDto } from "./dto/enroll-subject-student.dto.js";
 import type { ListSubjectsQueryDto } from "./dto/list-subjects-query.dto.js";
@@ -21,6 +22,7 @@ import type { UpdateSubjectDto } from "./dto/update-subject.dto.js";
 
 interface SubjectAccessRecord {
   id: string;
+  tenantId: string;
   teacherOwnerId: string;
   name: string;
   nameNormalized: string;
@@ -65,14 +67,32 @@ export class SubjectsService {
     return input.trim().toLowerCase();
   }
 
-  private async assertTeacherExists(teacherOwnerId: string): Promise<void> {
-    const teacher = await this.prisma.user.findUnique({
-      where: { id: teacherOwnerId },
-      select: { id: true, role: true, isActive: true },
+  private assertCanManageSubjects(actor: AuthenticatedUser): void {
+    if (actor.activeRole === RoleKey.school_admin || actor.isPlatformAdmin || isContentManagerRole(actor.activeRole)) {
+      return;
+    }
+
+    throw new ForbiddenException("Role cannot manage subjects");
+  }
+
+  private async assertTeacherExists(tenantId: string, teacherOwnerId: string): Promise<void> {
+    const membership = await this.prisma.membership.findFirst({
+      where: {
+        tenantId,
+        userId: teacherOwnerId,
+        status: "active",
+        role: {
+          in: [RoleKey.teacher, RoleKey.parent, RoleKey.tutor],
+        },
+        user: {
+          isActive: true,
+        },
+      },
+      select: { id: true },
     });
 
-    if (!teacher || teacher.role !== RoleKey.teacher || !teacher.isActive) {
-      throw new BadRequestException("Teacher owner must be an active teacher account");
+    if (!membership) {
+      throw new BadRequestException("Teacher owner must be an active teacher/parent/tutor member in this tenant");
     }
   }
 
@@ -80,15 +100,19 @@ export class SubjectsService {
     actor: AuthenticatedUser,
     teacherOwnerId?: string,
   ): Promise<string> {
-    if (actor.role === RoleKey.teacher) {
+    if (isContentManagerRole(actor.activeRole)) {
       return actor.id;
     }
 
-    if (!teacherOwnerId) {
-      throw new BadRequestException("teacherOwnerId is required for admin subject creation");
+    if (actor.activeRole !== RoleKey.school_admin && !actor.isPlatformAdmin) {
+      throw new ForbiddenException("Only school admin or content manager can create subjects");
     }
 
-    await this.assertTeacherExists(teacherOwnerId);
+    if (!teacherOwnerId) {
+      throw new BadRequestException("teacherOwnerId is required for school admin subject creation");
+    }
+
+    await this.assertTeacherExists(actor.activeTenantId, teacherOwnerId);
     return teacherOwnerId;
   }
 
@@ -96,10 +120,14 @@ export class SubjectsService {
     actor: AuthenticatedUser,
     subjectId: string,
   ): Promise<SubjectAccessRecord> {
-    const subject = await this.prisma.subject.findUnique({
-      where: { id: subjectId },
+    const subject = await this.prisma.subject.findFirst({
+      where: {
+        id: subjectId,
+        tenantId: actor.activeTenantId,
+      },
       select: {
         id: true,
+        tenantId: true,
         teacherOwnerId: true,
         name: true,
         nameNormalized: true,
@@ -111,8 +139,12 @@ export class SubjectsService {
       throw new NotFoundException("Subject not found");
     }
 
-    if (actor.role === RoleKey.teacher && subject.teacherOwnerId !== actor.id) {
-      throw new ForbiddenException("Teacher cannot access another teacher's subject");
+    if (isContentManagerRole(actor.activeRole) && subject.teacherOwnerId !== actor.id && !actor.isPlatformAdmin) {
+      throw new ForbiddenException("Cannot access another owner's subject");
+    }
+
+    if (actor.activeRole === RoleKey.student && !actor.isPlatformAdmin) {
+      throw new ForbiddenException("Students cannot manage subjects");
     }
 
     return subject;
@@ -121,6 +153,7 @@ export class SubjectsService {
   private async materializeAssignmentsForEnrollmentTx(
     tx: Prisma.TransactionClient,
     args: {
+      tenantId: string;
       subjectId: string;
       enrollmentId: string;
       studentId: string;
@@ -130,6 +163,7 @@ export class SubjectsService {
     const [lessons, exams] = await Promise.all([
       tx.lesson.findMany({
         where: {
+          tenantId: args.tenantId,
           subjectId: args.subjectId,
           isDeleted: false,
         },
@@ -137,6 +171,7 @@ export class SubjectsService {
       }),
       tx.exam.findMany({
         where: {
+          tenantId: args.tenantId,
           subjectId: args.subjectId,
           isDeleted: false,
         },
@@ -145,6 +180,7 @@ export class SubjectsService {
     ]);
 
     const lessonRows = lessons.map((lesson) => ({
+      tenantId: args.tenantId,
       assigneeStudentId: args.studentId,
       assignedByTeacherId: args.assignedByTeacherId,
       lessonId: lesson.id,
@@ -155,6 +191,7 @@ export class SubjectsService {
       dueAt: null,
     }));
     const examRows = exams.map((exam) => ({
+      tenantId: args.tenantId,
       assigneeStudentId: args.studentId,
       assignedByTeacherId: args.assignedByTeacherId,
       examId: exam.id,
@@ -195,46 +232,61 @@ export class SubjectsService {
   }
 
   async createSubject(actor: AuthenticatedUser, dto: CreateSubjectDto) {
+    this.assertCanManageSubjects(actor);
     const ownerId = await this.resolveCreateOwnerId(actor, dto.teacherOwnerId);
     const { name, nameNormalized } = this.normalizeSubjectName(dto.name);
 
-    const subject = await this.prisma.subject.create({
-      data: {
-        teacherOwnerId: ownerId,
-        name,
-        nameNormalized,
-      },
-      include: {
-        teacherOwner: {
-          select: {
-            id: true,
-            email: true,
+    try {
+      const subject = await this.prisma.subject.create({
+        data: {
+          tenantId: actor.activeTenantId,
+          teacherOwnerId: ownerId,
+          name,
+          nameNormalized,
+        },
+        include: {
+          teacherOwner: {
+            select: {
+              id: true,
+              email: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    await recordAuditEvent(this.prisma, {
-      actorUserId: actor.id,
-      action: "subject.create",
-      entityType: "subject",
-      entityId: subject.id,
-      metadataJson: {
-        teacherOwnerId: subject.teacherOwnerId,
-        name: subject.name,
-      },
-    });
+      await recordAuditEvent(this.prisma, {
+        actorUserId: actor.id,
+        tenantId: actor.activeTenantId,
+        membershipId: actor.activeMembershipId,
+        contextRole: actor.activeRole,
+        action: "subject.create",
+        entityType: "subject",
+        entityId: subject.id,
+        metadataJson: {
+          teacherOwnerId: subject.teacherOwnerId,
+          name: subject.name,
+        },
+      });
 
-    return subject;
+      return subject;
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        throw new ConflictException("Subject name already exists for this owner");
+      }
+      throw error;
+    }
   }
 
   async listSubjects(actor: AuthenticatedUser, query: ListSubjectsQueryDto) {
+    this.assertCanManageSubjects(actor);
+
     const includeArchived = query.includeArchived ?? false;
     const where: Prisma.SubjectWhereInput = {
+      tenantId: actor.activeTenantId,
       ...(includeArchived ? {} : { isArchived: false }),
     };
 
-    if (actor.role === RoleKey.teacher) {
+    if (isContentManagerRole(actor.activeRole)) {
       where.teacherOwnerId = actor.id;
     } else if (query.teacherId) {
       where.teacherOwnerId = query.teacherId;
@@ -262,6 +314,7 @@ export class SubjectsService {
   }
 
   async updateSubject(actor: AuthenticatedUser, subjectId: string, dto: UpdateSubjectDto) {
+    this.assertCanManageSubjects(actor);
     await this.getSubjectForActor(actor, subjectId);
 
     const data: Prisma.SubjectUpdateInput = {};
@@ -296,6 +349,9 @@ export class SubjectsService {
 
     await recordAuditEvent(this.prisma, {
       actorUserId: actor.id,
+      tenantId: actor.activeTenantId,
+      membershipId: actor.activeMembershipId,
+      contextRole: actor.activeRole,
       action: "subject.update",
       entityType: "subject",
       entityId: updated.id,
@@ -310,10 +366,14 @@ export class SubjectsService {
   }
 
   async listSubjectStudents(actor: AuthenticatedUser, subjectId: string) {
+    this.assertCanManageSubjects(actor);
     await this.getSubjectForActor(actor, subjectId);
 
     return this.prisma.subjectEnrollment.findMany({
-      where: { subjectId },
+      where: {
+        tenantId: actor.activeTenantId,
+        subjectId,
+      },
       include: {
         student: {
           select: {
@@ -332,19 +392,16 @@ export class SubjectsService {
     subjectId: string,
     dto: EnrollSubjectStudentDto,
   ) {
+    this.assertCanManageSubjects(actor);
     const subject = await this.getSubjectForActor(actor, subjectId);
     const email = this.normalizeEmail(dto.email);
 
     let student = await this.prisma.user.findUnique({
       where: { email },
-      select: { id: true, email: true, role: true, isActive: true },
+      select: { id: true, email: true, isActive: true },
     });
 
     let createdStudent = false;
-
-    if (student && student.role !== RoleKey.student) {
-      throw new ConflictException("Email already belongs to a non-student account");
-    }
 
     if (student && !student.isActive) {
       throw new BadRequestException("Student account is inactive");
@@ -376,14 +433,36 @@ export class SubjectsService {
     const autoAssignFuture = dto.autoAssignFuture ?? true;
 
     const result = await this.prisma.$transaction(async (tx) => {
+      await tx.membership.upsert({
+        where: {
+          userId_tenantId_role: {
+            userId: student.id,
+            tenantId: actor.activeTenantId,
+            role: RoleKey.student,
+          },
+        },
+        create: {
+          userId: student.id,
+          tenantId: actor.activeTenantId,
+          role: RoleKey.student,
+          status: "active",
+          invitedById: actor.id,
+        },
+        update: {
+          status: "active",
+        },
+      });
+
       const enrollment = await tx.subjectEnrollment.upsert({
         where: {
-          subjectId_studentId: {
+          tenantId_subjectId_studentId: {
+            tenantId: actor.activeTenantId,
             subjectId,
             studentId: student.id,
           },
         },
         create: {
+          tenantId: actor.activeTenantId,
           subjectId,
           studentId: student.id,
           status: "active",
@@ -410,6 +489,7 @@ export class SubjectsService {
       });
 
       const autoAssignments = await this.materializeAssignmentsForEnrollmentTx(tx, {
+        tenantId: actor.activeTenantId,
         subjectId,
         enrollmentId: enrollment.id,
         studentId: student.id,
@@ -427,6 +507,9 @@ export class SubjectsService {
 
     await recordAuditEvent(this.prisma, {
       actorUserId: actor.id,
+      tenantId: actor.activeTenantId,
+      membershipId: actor.activeMembershipId,
+      contextRole: actor.activeRole,
       action: "subject.enroll",
       entityType: "subject_enrollment",
       entityId: result.enrollment.id,
@@ -457,11 +540,13 @@ export class SubjectsService {
     studentId: string,
     dto: UpdateSubjectEnrollmentDto,
   ) {
+    this.assertCanManageSubjects(actor);
     const subject = await this.getSubjectForActor(actor, subjectId);
 
     const existing = await this.prisma.subjectEnrollment.findUnique({
       where: {
-        subjectId_studentId: {
+        tenantId_subjectId_studentId: {
+          tenantId: actor.activeTenantId,
           subjectId,
           studentId,
         },
@@ -516,6 +601,7 @@ export class SubjectsService {
     if (updated.status === "active") {
       autoAssignments = await this.prisma.$transaction(async (tx) =>
         this.materializeAssignmentsForEnrollmentTx(tx, {
+          tenantId: actor.activeTenantId,
           subjectId,
           enrollmentId: updated.id,
           studentId: updated.studentId,
@@ -535,6 +621,9 @@ export class SubjectsService {
 
     await recordAuditEvent(this.prisma, {
       actorUserId: actor.id,
+      tenantId: actor.activeTenantId,
+      membershipId: actor.activeMembershipId,
+      contextRole: actor.activeRole,
       action,
       entityType: "subject_enrollment",
       entityId: updated.id,
@@ -573,14 +662,18 @@ export class SubjectsService {
   }
 
   async ensureEnrollmentForManualAssignment(args: {
+    tenantId: string;
     subjectId: string;
     studentId: string;
     actorUserId: string;
+    actorMembershipId?: string;
+    actorRole?: RoleKey;
     teacherOwnerId: string;
   }): Promise<EnsureEnrollmentResult> {
     const existing = await this.prisma.subjectEnrollment.findUnique({
       where: {
-        subjectId_studentId: {
+        tenantId_subjectId_studentId: {
+          tenantId: args.tenantId,
           subjectId: args.subjectId,
           studentId: args.studentId,
         },
@@ -599,6 +692,7 @@ export class SubjectsService {
 
     const created = await this.prisma.subjectEnrollment.create({
       data: {
+        tenantId: args.tenantId,
         subjectId: args.subjectId,
         studentId: args.studentId,
         status: "active",
@@ -614,6 +708,9 @@ export class SubjectsService {
 
     await recordAuditEvent(this.prisma, {
       actorUserId: args.actorUserId,
+      tenantId: args.tenantId,
+      membershipId: args.actorMembershipId,
+      contextRole: args.actorRole,
       action: "subject.enroll",
       entityType: "subject_enrollment",
       entityId: created.id,
@@ -633,7 +730,10 @@ export class SubjectsService {
   }
 
   async autoAssignNewContent(args: {
+    tenantId: string;
     actorUserId: string;
+    actorMembershipId?: string;
+    actorRole?: RoleKey;
     subjectId: string;
     lessonId?: string;
     examId?: string;
@@ -647,10 +747,14 @@ export class SubjectsService {
       };
     }
 
-    const subject = await this.prisma.subject.findUnique({
-      where: { id: args.subjectId },
+    const subject = await this.prisma.subject.findFirst({
+      where: {
+        id: args.subjectId,
+        tenantId: args.tenantId,
+      },
       select: {
         id: true,
+        tenantId: true,
         teacherOwnerId: true,
       },
     });
@@ -662,6 +766,7 @@ export class SubjectsService {
     const result = await this.prisma.$transaction(async (tx) => {
       const activeEnrollments = await tx.subjectEnrollment.findMany({
         where: {
+          tenantId: args.tenantId,
           subjectId: subject.id,
           status: "active",
           autoAssignFuture: true,
@@ -683,6 +788,7 @@ export class SubjectsService {
 
       const lessonRows = args.lessonId
         ? activeEnrollments.map((enrollment) => ({
+            tenantId: args.tenantId,
             assigneeStudentId: enrollment.studentId,
             assignedByTeacherId: subject.teacherOwnerId,
             lessonId: args.lessonId,
@@ -696,6 +802,7 @@ export class SubjectsService {
 
       const examRows = args.examId
         ? activeEnrollments.map((enrollment) => ({
+            tenantId: args.tenantId,
             assigneeStudentId: enrollment.studentId,
             assignedByTeacherId: subject.teacherOwnerId,
             examId: args.examId,
@@ -727,6 +834,9 @@ export class SubjectsService {
     if (result.lessonCreated > 0 || result.examCreated > 0) {
       await recordAuditEvent(this.prisma, {
         actorUserId: args.actorUserId,
+        tenantId: args.tenantId,
+        membershipId: args.actorMembershipId,
+        contextRole: args.actorRole,
         action: "subject.auto_assign",
         entityType: "subject",
         entityId: args.subjectId,

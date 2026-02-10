@@ -11,12 +11,13 @@ import type { GradedQuestion, NormalizedExam, NormalizedQuestion } from "@educ/s
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
+import { isContentManagerRole } from "../common/authz/roles.js";
+import { env } from "../env.js";
 import { OpenAiService } from "../openai/openai.service.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { SubjectsService } from "../subjects/subjects.service.js";
 import { recordAuditEvent } from "../utils/audit.js";
-import { env } from "../env.js";
-import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
 import type { UploadedFile } from "../common/types/upload-file.type.js";
 import type { CreateAssignmentDto } from "./dto/create-assignment.dto.js";
 import type { AssignmentTypeValue } from "./dto/create-assignment.dto.js";
@@ -32,6 +33,7 @@ interface ValidationResult {
 
 interface SubjectShape {
   id: string;
+  tenantId: string;
   name: string;
   teacherOwnerId: string;
 }
@@ -58,6 +60,7 @@ export class ExamsService {
   private toSubject(subject: SubjectShape) {
     return {
       id: subject.id,
+      tenantId: subject.tenantId,
       name: subject.name,
       teacherOwnerId: subject.teacherOwnerId,
     };
@@ -66,6 +69,7 @@ export class ExamsService {
   private toExamSummary(exam: {
     id: string;
     title: string;
+    tenantId: string;
     subjectId: string;
     subjectRef: SubjectShape;
     isDeleted: boolean;
@@ -75,6 +79,7 @@ export class ExamsService {
     return {
       id: exam.id,
       title: exam.title,
+      tenantId: exam.tenantId,
       subjectId: exam.subjectId,
       subject: this.toSubject(exam.subjectRef),
       isDeleted: exam.isDeleted,
@@ -96,12 +101,16 @@ export class ExamsService {
     }
 
     if (dto.lessonId) {
-      const lesson = await this.prisma.lesson.findUnique({
-        where: { id: dto.lessonId },
+      const lesson = await this.prisma.lesson.findFirst({
+        where: {
+          id: dto.lessonId,
+          tenantId: actor.activeTenantId,
+        },
         include: {
           subjectRef: {
             select: {
               id: true,
+              tenantId: true,
               name: true,
               teacherOwnerId: true,
             },
@@ -121,12 +130,16 @@ export class ExamsService {
       };
     }
 
-    const exam = await this.prisma.exam.findUnique({
-      where: { id: dto.examId },
+    const exam = await this.prisma.exam.findFirst({
+      where: {
+        id: dto.examId,
+        tenantId: actor.activeTenantId,
+      },
       include: {
         subjectRef: {
           select: {
             id: true,
+            tenantId: true,
             name: true,
             teacherOwnerId: true,
           },
@@ -187,6 +200,7 @@ export class ExamsService {
 
     const exam = await this.prisma.exam.create({
       data: {
+        tenantId: actor.activeTenantId,
         title: normalized.normalized.title,
         subject: subject.name,
         subjectId: subject.id,
@@ -202,6 +216,7 @@ export class ExamsService {
         subjectRef: {
           select: {
             id: true,
+            tenantId: true,
             name: true,
             teacherOwnerId: true,
           },
@@ -210,13 +225,19 @@ export class ExamsService {
     });
 
     await this.subjectsService.autoAssignNewContent({
+      tenantId: actor.activeTenantId,
       actorUserId: actor.id,
+      actorMembershipId: actor.activeMembershipId,
+      actorRole: actor.activeRole,
       subjectId: exam.subjectId,
       examId: exam.id,
     });
 
     await recordAuditEvent(this.prisma, {
       actorUserId: actor.id,
+      tenantId: actor.activeTenantId,
+      membershipId: actor.activeMembershipId,
+      contextRole: actor.activeRole,
       action: "exam.upload",
       entityType: "exam",
       entityId: exam.id,
@@ -238,13 +259,17 @@ export class ExamsService {
   }
 
   async listExams(actor: AuthenticatedUser) {
-    if (actor.role === RoleKey.admin) {
+    if (actor.activeRole === RoleKey.school_admin || actor.isPlatformAdmin) {
       const exams = await this.prisma.exam.findMany({
-        where: { isDeleted: false },
+        where: {
+          tenantId: actor.activeTenantId,
+          isDeleted: false,
+        },
         include: {
           subjectRef: {
             select: {
               id: true,
+              tenantId: true,
               name: true,
               teacherOwnerId: true,
             },
@@ -255,9 +280,10 @@ export class ExamsService {
       return exams.map((exam) => this.toExamSummary(exam));
     }
 
-    if (actor.role === RoleKey.teacher) {
+    if (isContentManagerRole(actor.activeRole)) {
       const exams = await this.prisma.exam.findMany({
         where: {
+          tenantId: actor.activeTenantId,
           isDeleted: false,
           subjectRef: {
             teacherOwnerId: actor.id,
@@ -267,6 +293,7 @@ export class ExamsService {
           subjectRef: {
             select: {
               id: true,
+              tenantId: true,
               name: true,
               teacherOwnerId: true,
             },
@@ -279,6 +306,7 @@ export class ExamsService {
 
     const assignments = await this.prisma.assignment.findMany({
       where: {
+        tenantId: actor.activeTenantId,
         assigneeStudentId: actor.id,
         examId: { not: null },
       },
@@ -288,6 +316,7 @@ export class ExamsService {
             subjectRef: {
               select: {
                 id: true,
+                tenantId: true,
                 name: true,
                 teacherOwnerId: true,
               },
@@ -309,12 +338,16 @@ export class ExamsService {
   }
 
   async getExam(actor: AuthenticatedUser, examId: string) {
-    const exam = await this.prisma.exam.findUnique({
-      where: { id: examId },
+    const exam = await this.prisma.exam.findFirst({
+      where: {
+        id: examId,
+        tenantId: actor.activeTenantId,
+      },
       include: {
         subjectRef: {
           select: {
             id: true,
+            tenantId: true,
             name: true,
             teacherOwnerId: true,
           },
@@ -325,13 +358,14 @@ export class ExamsService {
       throw new NotFoundException("Exam not found");
     }
 
-    if (actor.role === RoleKey.teacher && exam.subjectRef.teacherOwnerId !== actor.id) {
-      throw new ForbiddenException("Teachers can only access owned exams");
+    if (isContentManagerRole(actor.activeRole) && exam.subjectRef.teacherOwnerId !== actor.id && actor.activeRole !== RoleKey.school_admin && !actor.isPlatformAdmin) {
+      throw new ForbiddenException("Cannot access another owner's exams");
     }
 
-    if (actor.role === RoleKey.student) {
+    if (actor.activeRole === RoleKey.student) {
       const assignment = await this.prisma.assignment.findFirst({
         where: {
+          tenantId: actor.activeTenantId,
           assigneeStudentId: actor.id,
           examId,
         },
@@ -364,26 +398,39 @@ export class ExamsService {
     const students = await this.prisma.user.findMany({
       where: {
         id: { in: studentIds },
-        role: RoleKey.student,
         isActive: true,
+        memberships: {
+          some: {
+            tenantId: actor.activeTenantId,
+            role: RoleKey.student,
+            status: "active",
+          },
+        },
       },
       select: { id: true },
     });
 
     if (students.length !== studentIds.length) {
-      throw new BadRequestException("One or more student IDs are invalid or inactive");
+      throw new BadRequestException("One or more student IDs are invalid/inactive or not in this tenant");
     }
 
     const dueAt = dto.dueAt ? new Date(dto.dueAt) : null;
+    if (dueAt && Number.isNaN(dueAt.valueOf())) {
+      throw new BadRequestException("Invalid dueAt date");
+    }
+
     const assignmentType: AssignmentTypeValue = dto.assignmentType ?? "practice";
     const maxAttempts = dto.maxAttempts ?? (assignmentType === "assessment" ? 1 : 3);
 
     const enrollments = new Map<string, string>();
     for (const studentId of studentIds) {
       const enrollment = await this.subjectsService.ensureEnrollmentForManualAssignment({
+        tenantId: actor.activeTenantId,
         subjectId: target.subject.id,
         studentId,
         actorUserId: actor.id,
+        actorMembershipId: actor.activeMembershipId,
+        actorRole: actor.activeRole,
         teacherOwnerId: target.subject.teacherOwnerId,
       });
       enrollments.set(studentId, enrollment.enrollmentId);
@@ -393,6 +440,7 @@ export class ExamsService {
       studentIds.map((studentId) =>
         this.prisma.assignment.create({
           data: {
+            tenantId: actor.activeTenantId,
             assigneeStudentId: studentId,
             assignedByTeacherId: target.subject.teacherOwnerId,
             lessonId: target.lessonId,
@@ -409,6 +457,9 @@ export class ExamsService {
 
     await recordAuditEvent(this.prisma, {
       actorUserId: actor.id,
+      tenantId: actor.activeTenantId,
+      membershipId: actor.activeMembershipId,
+      contextRole: actor.activeRole,
       action: "assignment.create",
       entityType: "assignment_batch",
       metadataJson: {
@@ -428,6 +479,7 @@ export class ExamsService {
   async getMyAssignments(student: AuthenticatedUser) {
     const assignments = await this.prisma.assignment.findMany({
       where: {
+        tenantId: student.activeTenantId,
         assigneeStudentId: student.id,
       },
       include: {
@@ -446,6 +498,7 @@ export class ExamsService {
             subjectRef: {
               select: {
                 id: true,
+                tenantId: true,
                 name: true,
                 teacherOwnerId: true,
               },
@@ -460,6 +513,7 @@ export class ExamsService {
             subjectRef: {
               select: {
                 id: true,
+                tenantId: true,
                 name: true,
                 teacherOwnerId: true,
               },
@@ -489,6 +543,7 @@ export class ExamsService {
         subject: subject
           ? {
               id: subject.id,
+              tenantId: subject.tenantId,
               name: subject.name,
               teacherOwnerId: subject.teacherOwnerId,
             }
@@ -500,6 +555,7 @@ export class ExamsService {
               gradeLevel: assignment.lesson.gradeLevel,
               subject: {
                 id: assignment.lesson.subjectRef.id,
+                tenantId: assignment.lesson.subjectRef.tenantId,
                 name: assignment.lesson.subjectRef.name,
                 teacherOwnerId: assignment.lesson.subjectRef.teacherOwnerId,
               },
@@ -511,6 +567,7 @@ export class ExamsService {
               title: assignment.exam.title,
               subject: {
                 id: assignment.exam.subjectRef.id,
+                tenantId: assignment.exam.subjectRef.tenantId,
                 name: assignment.exam.subjectRef.name,
                 teacherOwnerId: assignment.exam.subjectRef.teacherOwnerId,
               },
@@ -525,6 +582,7 @@ export class ExamsService {
       const assignment = await tx.assignment.findFirst({
         where: {
           id: dto.assignmentId,
+          tenantId: student.activeTenantId,
           assigneeStudentId: student.id,
         },
       });
@@ -537,13 +595,14 @@ export class ExamsService {
         throw new BadRequestException("This assignment does not include an exam");
       }
 
-      const exam = await tx.exam.findUnique({ where: { id: assignment.examId } });
+      const exam = await tx.exam.findFirst({ where: { id: assignment.examId, tenantId: student.activeTenantId } });
       if (!exam || exam.isDeleted) {
         throw new NotFoundException("Exam not found");
       }
 
       const inProgress = await tx.attempt.findFirst({
         where: {
+          tenantId: student.activeTenantId,
           assignmentId: assignment.id,
           studentId: student.id,
           status: "in_progress",
@@ -556,6 +615,7 @@ export class ExamsService {
 
       const attemptsUsed = await tx.attempt.count({
         where: {
+          tenantId: student.activeTenantId,
           assignmentId: assignment.id,
           studentId: student.id,
         },
@@ -566,6 +626,7 @@ export class ExamsService {
 
       return tx.attempt.create({
         data: {
+          tenantId: student.activeTenantId,
           assignmentId: assignment.id,
           examId: assignment.examId,
           studentId: student.id,
@@ -584,8 +645,11 @@ export class ExamsService {
   }
 
   async saveResponses(student: AuthenticatedUser, attemptId: string, dto: SaveResponsesDto) {
-    const attempt = await this.prisma.attempt.findUnique({
-      where: { id: attemptId },
+    const attempt = await this.prisma.attempt.findFirst({
+      where: {
+        id: attemptId,
+        tenantId: student.activeTenantId,
+      },
       include: {
         exam: {
           select: {
@@ -683,6 +747,7 @@ export class ExamsService {
     const markedSubmitted = await this.prisma.attempt.updateMany({
       where: {
         id: attemptId,
+        tenantId: student.activeTenantId,
         studentId: student.id,
         status: "in_progress",
       },
@@ -693,8 +758,8 @@ export class ExamsService {
     });
 
     if (markedSubmitted.count === 0) {
-      const existing = await this.prisma.attempt.findUnique({
-        where: { id: attemptId },
+      const existing = await this.prisma.attempt.findFirst({
+        where: { id: attemptId, tenantId: student.activeTenantId },
         select: { id: true, studentId: true, status: true },
       });
       if (!existing) {
@@ -706,8 +771,11 @@ export class ExamsService {
       throw new BadRequestException("Attempt is already submitted");
     }
 
-    const attempt = await this.prisma.attempt.findUnique({
-      where: { id: attemptId },
+    const attempt = await this.prisma.attempt.findFirst({
+      where: {
+        id: attemptId,
+        tenantId: student.activeTenantId,
+      },
       include: {
         exam: true,
         responses: true,
@@ -790,6 +858,9 @@ export class ExamsService {
 
     await recordAuditEvent(this.prisma, {
       actorUserId: student.id,
+      tenantId: student.activeTenantId,
+      membershipId: student.activeMembershipId,
+      contextRole: student.activeRole,
       action: "attempt.submit",
       entityType: "attempt",
       entityId: attemptId,
@@ -809,8 +880,11 @@ export class ExamsService {
   }
 
   async getAttemptResult(actor: AuthenticatedUser, attemptId: string) {
-    const attempt = await this.prisma.attempt.findUnique({
-      where: { id: attemptId },
+    const attempt = await this.prisma.attempt.findFirst({
+      where: {
+        id: attemptId,
+        tenantId: actor.activeTenantId,
+      },
       include: {
         exam: {
           select: {
@@ -821,6 +895,7 @@ export class ExamsService {
             subjectRef: {
               select: {
                 id: true,
+                tenantId: true,
                 name: true,
                 teacherOwnerId: true,
               },
@@ -841,19 +916,20 @@ export class ExamsService {
       throw new NotFoundException("Attempt not found");
     }
 
-    if (actor.role === RoleKey.student && attempt.studentId !== actor.id) {
+    if (actor.activeRole === RoleKey.student && attempt.studentId !== actor.id) {
       throw new ForbiddenException("Students can only view their own results");
     }
 
-    if (actor.role === RoleKey.teacher) {
-      const assignment = await this.prisma.assignment.findUnique({
+    if (isContentManagerRole(actor.activeRole)) {
+      const assignment = await this.prisma.assignment.findFirst({
         where: {
           id: attempt.assignmentId,
+          tenantId: actor.activeTenantId,
         },
       });
 
       if (!assignment || assignment.assignedByTeacherId !== actor.id) {
-        throw new ForbiddenException("Teacher does not have access to this attempt");
+        throw new ForbiddenException("Owner does not have access to this attempt");
       }
     }
 

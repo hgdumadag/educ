@@ -1,4 +1,6 @@
-export type RoleKey = "admin" | "teacher" | "student";
+export type RoleKey = "platform_admin" | "school_admin" | "teacher" | "student" | "parent" | "tutor";
+
+export type TenantType = "institution" | "individual";
 
 export type AssignmentType = "practice" | "assessment";
 
@@ -6,16 +8,28 @@ export type AssignmentSource = "manual" | "subject_auto";
 
 export type EnrollmentStatus = "active" | "completed";
 
+export interface AuthContext {
+  membershipId: string;
+  tenantId: string;
+  tenantName: string;
+  tenantType: TenantType;
+  role: RoleKey;
+}
+
 export interface MeResponse {
   id: string;
   email: string;
   role: RoleKey;
   displayRole: string;
+  isPlatformAdmin: boolean;
+  activeContext: AuthContext;
+  contexts: AuthContext[];
   permissions: string[];
 }
 
 export interface SubjectRef {
   id: string;
+  tenantId?: string;
   name: string;
   teacherOwnerId: string;
 }

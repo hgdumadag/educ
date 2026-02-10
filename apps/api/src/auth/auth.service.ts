@@ -6,8 +6,8 @@ import {
   ServiceUnavailableException,
   UnauthorizedException,
 } from "@nestjs/common";
+import { RoleKey } from "@prisma/client";
 import { createHash } from "node:crypto";
-import type { RoleKey } from "@prisma/client";
 
 import { env } from "../env.js";
 import { PrismaService } from "../prisma/prisma.service.js";
@@ -16,9 +16,22 @@ import { hashPassword, verifyPassword } from "../utils/password.js";
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from "../utils/tokens.js";
 import type { LoginDto } from "./dto/login.dto.js";
 
+interface AuthContextSummary {
+  membershipId: string;
+  tenantId: string;
+  tenantName: string;
+  tenantType: "institution" | "individual";
+  role: RoleKey;
+}
+
 interface AuthUserPayload {
   id: string;
+  email: string;
   role: RoleKey;
+  permissions: string[];
+  isPlatformAdmin: boolean;
+  activeContext: AuthContextSummary;
+  contexts: AuthContextSummary[];
   displayRole: string;
 }
 
@@ -29,19 +42,28 @@ interface AuthSessionResult {
 }
 
 const DEFAULT_ROLE_LABELS: Record<RoleKey, string> = {
-  admin: "Admin",
+  platform_admin: "Platform Admin",
+  school_admin: "School Admin",
   teacher: "Teacher",
   student: "Student",
+  parent: "Parent",
+  tutor: "Tutor",
 };
 
 const PERMISSIONS: Record<RoleKey, string[]> = {
-  admin: [
-    "users:create",
-    "users:update",
-    "labels:update",
+  platform_admin: [
+    "platform:institutions:manage",
+    "platform:billing:read",
+    "tenants:memberships:manage:any",
+  ],
+  school_admin: [
+    "tenants:memberships:manage",
+    "subjects:manage:any",
+    "lessons:upload",
+    "exams:upload",
+    "assignments:create",
     "reports:read",
     "audit:read",
-    "subjects:manage:any",
   ],
   teacher: [
     "subjects:manage:own",
@@ -49,7 +71,20 @@ const PERMISSIONS: Record<RoleKey, string[]> = {
     "exams:upload",
     "assignments:create",
     "results:read",
-    "reports:export",
+  ],
+  parent: [
+    "subjects:manage:own",
+    "lessons:upload",
+    "exams:upload",
+    "assignments:create",
+    "results:read",
+  ],
+  tutor: [
+    "subjects:manage:own",
+    "lessons:upload",
+    "exams:upload",
+    "assignments:create",
+    "results:read",
   ],
   student: ["assignments:read:own", "attempts:create", "attempts:submit", "results:read:own"],
 };
@@ -124,12 +159,153 @@ export class AuthService {
     return roleLabel?.displayLabel ?? DEFAULT_ROLE_LABELS[role];
   }
 
+  private async listActiveMemberships(userId: string) {
+    return this.prisma.membership.findMany({
+      where: {
+        userId,
+        status: "active",
+        tenant: {
+          status: "active",
+        },
+      },
+      include: {
+        tenant: {
+          select: {
+            id: true,
+            name: true,
+            type: true,
+          },
+        },
+      },
+      orderBy: [{ createdAt: "asc" }],
+    });
+  }
+
+  private toContextSummary(membership: {
+    id: string;
+    tenantId: string;
+    role: RoleKey;
+    tenant: {
+      id: string;
+      name: string;
+      type: "institution" | "individual";
+    };
+  }): AuthContextSummary {
+    return {
+      membershipId: membership.id,
+      tenantId: membership.tenantId,
+      tenantName: membership.tenant.name,
+      tenantType: membership.tenant.type,
+      role: membership.role,
+    };
+  }
+
+  private pickActiveMembership(
+    memberships: Array<{
+      id: string;
+      tenantId: string;
+      role: RoleKey;
+      tenant: { id: string; name: string; type: "institution" | "individual" };
+    }>,
+    preferredMembershipId?: string,
+  ) {
+    if (memberships.length === 0) {
+      throw new UnauthorizedException("No active memberships available");
+    }
+
+    if (preferredMembershipId) {
+      const matched = memberships.find((membership) => membership.id === preferredMembershipId);
+      if (matched) {
+        return matched;
+      }
+    }
+
+    return memberships[0];
+  }
+
+  private getEffectiveRole(isPlatformAdmin: boolean, activeMembershipRole: RoleKey): RoleKey {
+    return isPlatformAdmin ? RoleKey.platform_admin : activeMembershipRole;
+  }
+
+  private buildPermissions(isPlatformAdmin: boolean, activeMembershipRole: RoleKey): string[] {
+    const activeRolePermissions = PERMISSIONS[activeMembershipRole] ?? [];
+    if (isPlatformAdmin) {
+      return [...new Set([...activeRolePermissions, ...PERMISSIONS.platform_admin])];
+    }
+
+    return activeRolePermissions;
+  }
+
+  private async createSession(
+    user: { id: string; email: string; isPlatformAdmin: boolean },
+    memberships: Array<{
+      id: string;
+      tenantId: string;
+      role: RoleKey;
+      tenant: { id: string; name: string; type: "institution" | "individual" };
+    }>,
+    preferredMembershipId?: string,
+  ): Promise<AuthSessionResult> {
+    const activeMembership = this.pickActiveMembership(memberships, preferredMembershipId);
+    const effectiveRole = this.getEffectiveRole(user.isPlatformAdmin, activeMembership.role);
+    const permissions = this.buildPermissions(user.isPlatformAdmin, activeMembership.role);
+
+    const accessToken = signAccessToken(
+      {
+        sub: user.id,
+        activeTenantId: activeMembership.tenantId,
+        activeMembershipId: activeMembership.id,
+        activeRole: activeMembership.role,
+      },
+      env.jwtAccessSecret,
+    );
+
+    const refreshToken = signRefreshToken(
+      {
+        sub: user.id,
+        activeTenantId: activeMembership.tenantId,
+        activeMembershipId: activeMembership.id,
+        activeRole: activeMembership.role,
+      },
+      env.jwtRefreshSecret,
+    );
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { refreshTokenHash: await hashPassword(refreshToken) },
+    });
+
+    const contexts = memberships.map((membership) => this.toContextSummary(membership));
+
+    return {
+      accessToken,
+      refreshToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        role: effectiveRole,
+        permissions,
+        isPlatformAdmin: user.isPlatformAdmin,
+        activeContext: this.toContextSummary(activeMembership),
+        contexts,
+        displayRole: await this.getDisplayLabel(effectiveRole),
+      },
+    };
+  }
+
   async login(dto: LoginDto, ipAddress: string): Promise<AuthSessionResult> {
     const identifier = dto.identifier.toLowerCase().trim();
     await this.assertLoginAllowed(identifier, ipAddress);
 
     const user = await this.prisma.user.findUnique({
       where: { email: identifier },
+      select: {
+        id: true,
+        email: true,
+        passwordHash: true,
+        isActive: true,
+        isPlatformAdmin: true,
+      },
     });
 
     if (!user || !user.isActive) {
@@ -145,31 +321,16 @@ export class AuthService {
 
     await this.clearLoginFailures(identifier, ipAddress);
 
-    const accessToken = signAccessToken(
-      { sub: user.id, role: user.role },
-      env.jwtAccessSecret,
-    );
-    const refreshToken = signRefreshToken(
-      { sub: user.id, role: user.role },
-      env.jwtRefreshSecret,
-    );
+    const memberships = await this.listActiveMemberships(user.id);
 
-    const refreshTokenHash = await hashPassword(refreshToken);
-
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { refreshTokenHash },
-    });
-
-    return {
-      accessToken,
-      refreshToken,
-      user: {
+    return this.createSession(
+      {
         id: user.id,
-        role: user.role,
-        displayRole: await this.getDisplayLabel(user.role),
+        email: user.email,
+        isPlatformAdmin: user.isPlatformAdmin,
       },
-    };
+      memberships,
+    );
   }
 
   async refresh(refreshToken: string): Promise<AuthSessionResult> {
@@ -180,7 +341,16 @@ export class AuthService {
       throw new UnauthorizedException("Invalid refresh token");
     }
 
-    const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: {
+        id: true,
+        email: true,
+        refreshTokenHash: true,
+        isActive: true,
+        isPlatformAdmin: true,
+      },
+    });
     if (!user || !user.isActive || !user.refreshTokenHash) {
       throw new UnauthorizedException("Refresh token rejected");
     }
@@ -190,29 +360,50 @@ export class AuthService {
       throw new UnauthorizedException("Refresh token rejected");
     }
 
-    const accessToken = signAccessToken(
-      { sub: user.id, role: user.role },
-      env.jwtAccessSecret,
-    );
-    const newRefreshToken = signRefreshToken(
-      { sub: user.id, role: user.role },
-      env.jwtRefreshSecret,
-    );
+    const memberships = await this.listActiveMemberships(user.id);
 
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { refreshTokenHash: await hashPassword(newRefreshToken) },
+    return this.createSession(
+      {
+        id: user.id,
+        email: user.email,
+        isPlatformAdmin: user.isPlatformAdmin,
+      },
+      memberships,
+      payload.activeMembershipId,
+    );
+  }
+
+  async switchContext(userId: string, membershipId: string): Promise<AuthSessionResult> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        isPlatformAdmin: true,
+        isActive: true,
+      },
     });
 
-    return {
-      accessToken,
-      refreshToken: newRefreshToken,
-      user: {
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException("User not found or inactive");
+    }
+
+    const memberships = await this.listActiveMemberships(user.id);
+    const selected = memberships.find((membership) => membership.id === membershipId);
+
+    if (!selected) {
+      throw new UnauthorizedException("Membership is not available for this user");
+    }
+
+    return this.createSession(
+      {
         id: user.id,
-        role: user.role,
-        displayRole: await this.getDisplayLabel(user.role),
+        email: user.email,
+        isPlatformAdmin: user.isPlatformAdmin,
       },
-    };
+      memberships,
+      selected.id,
+    );
   }
 
   async logout(args: { userId?: string; refreshToken?: string }): Promise<{ ok: true }> {
@@ -239,18 +430,35 @@ export class AuthService {
     return { ok: true };
   }
 
-  async me(userId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+  async me(args: { userId: string; activeMembershipId?: string }) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: args.userId },
+      select: {
+        id: true,
+        email: true,
+        isPlatformAdmin: true,
+      },
+    });
+
     if (!user) {
       throw new UnauthorizedException("User not found");
     }
 
+    const memberships = await this.listActiveMemberships(user.id);
+    const activeMembership = this.pickActiveMembership(memberships, args.activeMembershipId);
+    const effectiveRole = this.getEffectiveRole(user.isPlatformAdmin, activeMembership.role);
+    const permissions = this.buildPermissions(user.isPlatformAdmin, activeMembership.role);
+    const activeContext = this.toContextSummary(activeMembership);
+
     return {
       id: user.id,
       email: user.email,
-      role: user.role,
-      displayRole: await this.getDisplayLabel(user.role),
-      permissions: PERMISSIONS[user.role],
+      role: effectiveRole,
+      isPlatformAdmin: user.isPlatformAdmin,
+      activeContext,
+      contexts: memberships.map((membership) => this.toContextSummary(membership)),
+      displayRole: await this.getDisplayLabel(effectiveRole),
+      permissions,
     };
   }
 }

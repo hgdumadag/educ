@@ -27,7 +27,7 @@ import { UpdateUserDto } from "./dto/update-user.dto.js";
 
 @Controller("admin")
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(RoleKey.admin)
+@Roles(RoleKey.school_admin)
 export class AdminController {
   constructor(@Inject(AdminService) private readonly adminService: AdminService) {}
 
@@ -40,8 +40,11 @@ export class AdminController {
   }
 
   @Get("users")
-  async listUsers(@Query("role") role?: RoleKey) {
-    return this.adminService.listUsers({ role });
+  async listUsers(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Query("role") role?: RoleKey,
+  ) {
+    return this.adminService.listUsers(actor, { role });
   }
 
   @Patch("users/:userId")
@@ -86,24 +89,26 @@ export class AdminController {
 
   @Get("reports/attempts")
   async attemptsReport(
+    @CurrentUser() actor: AuthenticatedUser,
     @Query("page", new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query("pageSize", new DefaultValuePipe(50), ParseIntPipe) pageSize: number,
   ) {
-    return this.adminService.getAttemptsReport({ page, pageSize });
+    return this.adminService.getAttemptsReport(actor, { page, pageSize });
   }
 
   @Get("reports/export.csv")
   @Header("Content-Type", "text/csv")
-  async exportCsv() {
-    return this.adminService.exportAttemptsCsv();
+  async exportCsv(@CurrentUser() actor: AuthenticatedUser) {
+    return this.adminService.exportAttemptsCsv(actor);
   }
 
   @Get("audit-events")
   async auditEvents(
+    @CurrentUser() actor: AuthenticatedUser,
     @Query("page", new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query("pageSize", new DefaultValuePipe(50), ParseIntPipe) pageSize: number,
   ) {
-    return this.adminService.getAuditEvents({ page, pageSize });
+    return this.adminService.getAuditEvents(actor, { page, pageSize });
   }
 
   @Get("metrics")

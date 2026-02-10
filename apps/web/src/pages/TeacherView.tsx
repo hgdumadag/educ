@@ -410,7 +410,7 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
     return (
       <section className="panel">
         <h3>Teacher Scope Required</h3>
-        <p className="muted">Select a teacher to manage subjects, students, lessons, exams, and assignments.</p>
+        <p className="muted">Select a teacher to open the Axiometry teacher workspace.</p>
       </section>
     );
   }
@@ -418,8 +418,8 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
   return (
     <div className="stack">
       <section className="panel stack">
-        <h3>Teacher Workspace</h3>
-        <p className="muted">Navigate by your top priorities and manage relationships from one screen.</p>
+        <h3>Axiometry Teacher Workspace</h3>
+        <p className="muted">Navigate by your top priorities and manage classroom relationships from one screen.</p>
         <div className="focus-nav">
           {FOCUS_ITEMS.map((item) => (
             <button
@@ -509,7 +509,7 @@ export function TeacherView({ adminMode = false, teacherScopeId }: TeacherViewPr
       {activeFocus === "students" ? (
         <section className="panel stack">
           <h3>My Students</h3>
-          <p className="muted">All students across your subjects, plus enrollment controls for the selected subject.</p>
+          <p className="muted">All students across your Axiometry subjects, plus enrollment controls for the selected subject.</p>
 
           <div className="student-overview-grid">
             {allStudents.length === 0 ? (

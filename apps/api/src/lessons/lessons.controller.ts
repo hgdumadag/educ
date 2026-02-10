@@ -35,7 +35,7 @@ export class LessonsController {
   constructor(@Inject(LessonsService) private readonly lessonsService: LessonsService) {}
 
   @Post("upload")
-  @Roles(RoleKey.teacher, RoleKey.admin)
+  @Roles(RoleKey.school_admin, RoleKey.teacher, RoleKey.parent, RoleKey.tutor)
   @UseInterceptors(
     FileInterceptor("file", {
       limits: { fileSize: env.uploadMaxLessonZipBytes },
@@ -73,7 +73,7 @@ export class LessonsController {
   }
 
   @Delete(":lessonId")
-  @Roles(RoleKey.teacher, RoleKey.admin)
+  @Roles(RoleKey.school_admin, RoleKey.teacher, RoleKey.parent, RoleKey.tutor)
   async remove(
     @CurrentUser() actor: AuthenticatedUser,
     @Param("lessonId") lessonId: string,

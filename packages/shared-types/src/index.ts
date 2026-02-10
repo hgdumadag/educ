@@ -1,4 +1,14 @@
-export type RoleKey = "admin" | "teacher" | "student";
+export type RoleKey =
+  | "platform_admin"
+  | "school_admin"
+  | "teacher"
+  | "student"
+  | "parent"
+  | "tutor";
+
+export type TenantType = "institution" | "individual";
+
+export type MembershipStatus = "active" | "invited" | "disabled";
 
 export type AttemptStatus =
   | "in_progress"
@@ -16,10 +26,30 @@ export type QuestionType =
   | "short-answer"
   | "long-answer";
 
+export interface AuthContext {
+  membershipId: string;
+  tenantId: string;
+  tenantName: string;
+  tenantType: TenantType;
+  role: RoleKey;
+}
+
+export interface MembershipSummary {
+  id: string;
+  tenantId: string;
+  userId: string;
+  role: RoleKey;
+  status: MembershipStatus;
+}
+
 export interface AuthUser {
   id: string;
+  email: string;
   role: RoleKey;
   displayRole: string;
+  isPlatformAdmin: boolean;
+  activeContext: AuthContext;
+  contexts: AuthContext[];
 }
 
 export interface AuthResponse {
@@ -92,6 +122,7 @@ export interface CreateAttemptPayload {
 
 export interface SubjectSummary {
   id: string;
+  tenantId: string;
   teacherOwnerId: string;
   name: string;
   isArchived: boolean;
@@ -101,6 +132,7 @@ export interface SubjectSummary {
 
 export interface SubjectEnrollment {
   id: string;
+  tenantId: string;
   subjectId: string;
   studentId: string;
   status: EnrollmentStatus;
@@ -117,4 +149,12 @@ export interface SubjectRosterItem {
     email: string;
     isActive: boolean;
   };
+}
+
+export interface BillingAccountSummary {
+  id: string;
+  ownerType: "tenant" | "user";
+  ownerId: string;
+  plan: string;
+  status: "active" | "trialing" | "past_due" | "canceled";
 }

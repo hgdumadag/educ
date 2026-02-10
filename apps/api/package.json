@@ -10,7 +10,8 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:integration": "vitest run --config vitest.integration.config.ts --passWithNoTests",
-    "db:migrate": "prisma migrate dev",
+    "db:migrate": "tsx scripts/prisma.ts migrate deploy --schema prisma/schema.prisma",
+    "db:migrate:dev": "tsx scripts/prisma.ts migrate dev --schema prisma/schema.prisma",
     "db:seed": "tsx prisma/seed.ts"
   },
   "dependencies": {

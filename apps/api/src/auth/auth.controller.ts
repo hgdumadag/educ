@@ -12,16 +12,17 @@ import {
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 
+import { CurrentUser } from "../common/decorators/current-user.decorator.js";
+import { JwtAuthGuard } from "../common/guards/jwt-auth.guard.js";
+import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
 import {
   REFRESH_TOKEN_COOKIE,
   clearAuthCookies,
   setAuthCookies,
 } from "./auth-cookies.js";
-import { CurrentUser } from "../common/decorators/current-user.decorator.js";
-import { JwtAuthGuard } from "../common/guards/jwt-auth.guard.js";
-import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
 import { AuthService } from "./auth.service.js";
 import { LoginDto } from "./dto/login.dto.js";
+import { SwitchContextDto } from "./dto/switch-context.dto.js";
 
 @Controller("auth")
 export class AuthController {
@@ -60,6 +61,20 @@ export class AuthController {
     return { user: session.user };
   }
 
+  @Post("switch-context")
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(200)
+  async switchContext(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: SwitchContextDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const session = await this.authService.switchContext(user.id, dto.membershipId);
+    setAuthCookies(res, session.accessToken, session.refreshToken);
+
+    return { user: session.user };
+  }
+
   @Post("logout")
   @HttpCode(200)
   async logout(
@@ -75,6 +90,9 @@ export class AuthController {
   @Get("me")
   @UseGuards(JwtAuthGuard)
   async me(@CurrentUser() user: AuthenticatedUser) {
-    return this.authService.me(user.id);
+    return this.authService.me({
+      userId: user.id,
+      activeMembershipId: user.activeMembershipId,
+    });
   }
 }

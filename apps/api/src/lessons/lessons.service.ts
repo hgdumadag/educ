@@ -10,11 +10,12 @@ import AdmZip from "adm-zip";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
+import { isContentManagerRole } from "../common/authz/roles.js";
 import { env } from "../env.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { SubjectsService } from "../subjects/subjects.service.js";
 import { recordAuditEvent } from "../utils/audit.js";
-import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
 import type { UploadedFile } from "../common/types/upload-file.type.js";
 
 interface LessonUploadResult {
@@ -42,9 +43,10 @@ export class LessonsService {
     return fullPath;
   }
 
-  private toSubject(subject: { id: string; name: string; teacherOwnerId: string }) {
+  private toSubject(subject: { id: string; tenantId: string; name: string; teacherOwnerId: string }) {
     return {
       id: subject.id,
+      tenantId: subject.tenantId,
       name: subject.name,
       teacherOwnerId: subject.teacherOwnerId,
     };
@@ -54,6 +56,7 @@ export class LessonsService {
     id: string;
     title: string;
     gradeLevel: string | null;
+    tenantId: string;
     subject: string;
     subjectId: string;
     contentPath: string;
@@ -64,6 +67,7 @@ export class LessonsService {
     updatedAt: Date;
     subjectRef: {
       id: string;
+      tenantId: string;
       name: string;
       teacherOwnerId: string;
     };
@@ -142,6 +146,7 @@ export class LessonsService {
 
     const lesson = await this.prisma.lesson.create({
       data: {
+        tenantId: actor.activeTenantId,
         title,
         subject: subject.name,
         subjectId: subject.id,
@@ -154,6 +159,7 @@ export class LessonsService {
         subjectRef: {
           select: {
             id: true,
+            tenantId: true,
             name: true,
             teacherOwnerId: true,
           },
@@ -162,13 +168,19 @@ export class LessonsService {
     });
 
     await this.subjectsService.autoAssignNewContent({
+      tenantId: actor.activeTenantId,
       actorUserId: actor.id,
+      actorMembershipId: actor.activeMembershipId,
+      actorRole: actor.activeRole,
       subjectId: lesson.subjectId,
       lessonId: lesson.id,
     });
 
     await recordAuditEvent(this.prisma, {
       actorUserId: actor.id,
+      tenantId: actor.activeTenantId,
+      membershipId: actor.activeMembershipId,
+      contextRole: actor.activeRole,
       action: "lesson.upload",
       entityType: "lesson",
       entityId: lesson.id,
@@ -184,13 +196,17 @@ export class LessonsService {
   }
 
   async listLessons(actor: AuthenticatedUser) {
-    if (actor.role === RoleKey.admin) {
+    if (actor.activeRole === RoleKey.school_admin || actor.isPlatformAdmin) {
       const lessons = await this.prisma.lesson.findMany({
-        where: { isDeleted: false },
+        where: {
+          tenantId: actor.activeTenantId,
+          isDeleted: false,
+        },
         include: {
           subjectRef: {
             select: {
               id: true,
+              tenantId: true,
               name: true,
               teacherOwnerId: true,
             },
@@ -201,9 +217,10 @@ export class LessonsService {
       return lessons.map((lesson) => this.toLessonResponse(lesson));
     }
 
-    if (actor.role === RoleKey.teacher) {
+    if (isContentManagerRole(actor.activeRole)) {
       const lessons = await this.prisma.lesson.findMany({
         where: {
+          tenantId: actor.activeTenantId,
           isDeleted: false,
           subjectRef: {
             teacherOwnerId: actor.id,
@@ -213,6 +230,7 @@ export class LessonsService {
           subjectRef: {
             select: {
               id: true,
+              tenantId: true,
               name: true,
               teacherOwnerId: true,
             },
@@ -225,6 +243,7 @@ export class LessonsService {
 
     const assignments = await this.prisma.assignment.findMany({
       where: {
+        tenantId: actor.activeTenantId,
         assigneeStudentId: actor.id,
         lessonId: { not: null },
       },
@@ -234,6 +253,7 @@ export class LessonsService {
             subjectRef: {
               select: {
                 id: true,
+                tenantId: true,
                 name: true,
                 teacherOwnerId: true,
               },
@@ -255,12 +275,16 @@ export class LessonsService {
   }
 
   async getLesson(actor: AuthenticatedUser, lessonId: string) {
-    const lesson = await this.prisma.lesson.findUnique({
-      where: { id: lessonId },
+    const lesson = await this.prisma.lesson.findFirst({
+      where: {
+        id: lessonId,
+        tenantId: actor.activeTenantId,
+      },
       include: {
         subjectRef: {
           select: {
             id: true,
+            tenantId: true,
             name: true,
             teacherOwnerId: true,
           },
@@ -271,13 +295,14 @@ export class LessonsService {
       throw new NotFoundException("Lesson not found");
     }
 
-    if (actor.role === RoleKey.teacher && lesson.subjectRef.teacherOwnerId !== actor.id) {
-      throw new ForbiddenException("Teachers can only access owned lessons");
+    if (isContentManagerRole(actor.activeRole) && lesson.subjectRef.teacherOwnerId !== actor.id && actor.activeRole !== RoleKey.school_admin && !actor.isPlatformAdmin) {
+      throw new ForbiddenException("Cannot access another owner's lessons");
     }
 
-    if (actor.role === RoleKey.student) {
+    if (actor.activeRole === RoleKey.student) {
       const assignment = await this.prisma.assignment.findFirst({
         where: {
+          tenantId: actor.activeTenantId,
           assigneeStudentId: actor.id,
           lessonId,
         },
@@ -292,8 +317,11 @@ export class LessonsService {
   }
 
   async softDelete(actor: AuthenticatedUser, lessonId: string): Promise<{ ok: true }> {
-    const lesson = await this.prisma.lesson.findUnique({
-      where: { id: lessonId },
+    const lesson = await this.prisma.lesson.findFirst({
+      where: {
+        id: lessonId,
+        tenantId: actor.activeTenantId,
+      },
       include: {
         subjectRef: {
           select: {
@@ -306,15 +334,19 @@ export class LessonsService {
       throw new NotFoundException("Lesson not found");
     }
 
-    const ownerOrAdmin = actor.role === RoleKey.admin || lesson.subjectRef.teacherOwnerId === actor.id;
+    const ownerOrAdmin =
+      actor.activeRole === RoleKey.school_admin || actor.isPlatformAdmin || lesson.subjectRef.teacherOwnerId === actor.id;
     if (!ownerOrAdmin) {
-      throw new ForbiddenException("Only owner or admin can delete this lesson");
+      throw new ForbiddenException("Only owner or school admin can delete this lesson");
     }
 
     await this.prisma.lesson.update({ where: { id: lessonId }, data: { isDeleted: true } });
 
     await recordAuditEvent(this.prisma, {
       actorUserId: actor.id,
+      tenantId: actor.activeTenantId,
+      membershipId: actor.activeMembershipId,
+      contextRole: actor.activeRole,
       action: "lesson.delete",
       entityType: "lesson",
       entityId: lessonId,

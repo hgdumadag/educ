@@ -2,15 +2,18 @@ import jwt from "jsonwebtoken";
 
 import type { RoleKey } from "@prisma/client";
 
-export interface AccessTokenPayload {
+interface BaseTokenPayload {
   sub: string;
-  role: RoleKey;
+  activeTenantId: string;
+  activeMembershipId: string;
+  activeRole: RoleKey;
+}
+
+export interface AccessTokenPayload extends BaseTokenPayload {
   type: "access";
 }
 
-export interface RefreshTokenPayload {
-  sub: string;
-  role: RoleKey;
+export interface RefreshTokenPayload extends BaseTokenPayload {
   type: "refresh";
 }
 

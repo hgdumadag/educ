@@ -13,3 +13,7 @@ packages/*/dist
 *.tsbuildinfo
 data/uploads/*
 !data/uploads/.gitkeep
+
+# API runtime uploads (local dev)
+apps/api/data/uploads/*
+!apps/api/data/uploads/.gitkeep

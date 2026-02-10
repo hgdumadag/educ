@@ -39,7 +39,7 @@ export class ExamsController {
   constructor(@Inject(ExamsService) private readonly examsService: ExamsService) {}
 
   @Post("exams/upload")
-  @Roles(RoleKey.teacher, RoleKey.admin)
+  @Roles(RoleKey.school_admin, RoleKey.teacher, RoleKey.parent, RoleKey.tutor)
   @UseInterceptors(
     FileInterceptor("file", {
       limits: { fileSize: env.uploadMaxExamJsonBytes },
@@ -77,7 +77,7 @@ export class ExamsController {
   }
 
   @Post("assignments")
-  @Roles(RoleKey.teacher, RoleKey.admin)
+  @Roles(RoleKey.school_admin, RoleKey.teacher, RoleKey.parent, RoleKey.tutor)
   async createAssignment(
     @CurrentUser() actor: AuthenticatedUser,
     @Body() dto: CreateAssignmentDto,
