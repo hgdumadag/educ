@@ -72,6 +72,14 @@ export class LessonsController {
     return this.lessonsService.getLesson(actor, lessonId);
   }
 
+  @Get(":lessonId/content")
+  async content(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param("lessonId") lessonId: string,
+  ) {
+    return this.lessonsService.getLessonContent(actor, lessonId);
+  }
+
   @Delete(":lessonId")
   @Roles(RoleKey.school_admin, RoleKey.teacher, RoleKey.parent, RoleKey.tutor)
   async remove(

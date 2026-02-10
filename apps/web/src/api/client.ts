@@ -277,6 +277,13 @@ export const api = {
     return request<LessonSummary[]>("/lessons", { method: "GET" });
   },
 
+  async lessonContent(lessonId: string): Promise<{ lessonId: string; title: string; subject: { id: string; name: string }; markdown: string }> {
+    return request<{ lessonId: string; title: string; subject: { id: string; name: string }; markdown: string }>(
+      `/lessons/${lessonId}/content`,
+      { method: "GET" },
+    );
+  },
+
   async uploadExam(file: File, subjectId: string) {
     const body = new FormData();
     body.append("file", file);

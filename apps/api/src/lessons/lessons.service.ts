@@ -7,7 +7,7 @@ import {
 } from "@nestjs/common";
 import { Prisma, RoleKey } from "@prisma/client";
 import AdmZip from "adm-zip";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { AuthenticatedUser } from "../common/types/authenticated-user.type.js";
@@ -314,6 +314,84 @@ export class LessonsService {
     }
 
     return this.toLessonResponse(lesson);
+  }
+
+  async getLessonContent(
+    actor: AuthenticatedUser,
+    lessonId: string,
+  ): Promise<{ lessonId: string; title: string; subject: { id: string; name: string }; markdown: string }> {
+    const lesson = await this.prisma.lesson.findFirst({
+      where: {
+        id: lessonId,
+        tenantId: actor.activeTenantId,
+      },
+      include: {
+        subjectRef: {
+          select: {
+            id: true,
+            name: true,
+            teacherOwnerId: true,
+          },
+        },
+      },
+    });
+    if (!lesson || lesson.isDeleted) {
+      throw new NotFoundException("Lesson not found");
+    }
+
+    if (
+      isContentManagerRole(actor.activeRole) &&
+      lesson.subjectRef.teacherOwnerId !== actor.id &&
+      actor.activeRole !== RoleKey.school_admin &&
+      !actor.isPlatformAdmin
+    ) {
+      throw new ForbiddenException("Cannot access another owner's lessons");
+    }
+
+    if (actor.activeRole === RoleKey.student) {
+      const assignment = await this.prisma.assignment.findFirst({
+        where: {
+          tenantId: actor.activeTenantId,
+          assigneeStudentId: actor.id,
+          lessonId,
+        },
+        select: { id: true },
+      });
+
+      if (!assignment) {
+        throw new ForbiddenException("Lesson is not assigned to this student");
+      }
+    }
+
+    if (env.uploadStorageMode !== "local") {
+      throw new BadRequestException("Lesson content preview is supported only in local upload mode");
+    }
+
+    let zipBuffer: Buffer;
+    try {
+      zipBuffer = await readFile(lesson.contentPath);
+    } catch {
+      throw new NotFoundException("Lesson content file is missing on disk");
+    }
+
+    const zip = new AdmZip(zipBuffer);
+    const entries = zip.getEntries();
+    const contentEntry = entries.find((entry) => entry.entryName.endsWith("content.md"));
+    if (!contentEntry) {
+      throw new BadRequestException("Lesson package is missing content.md");
+    }
+
+    const markdown = contentEntry.getData().toString("utf8");
+
+    return {
+      lessonId: lesson.id,
+      title: lesson.title,
+      subject: {
+        id: lesson.subjectRef.id,
+        name: lesson.subjectRef.name,
+      },
+      markdown,
+    };
   }
 
   async softDelete(actor: AuthenticatedUser, lessonId: string): Promise<{ ok: true }> {

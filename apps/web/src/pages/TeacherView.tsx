@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import axiometryLogo from "../assets/axiometry-logo.png";
 import axiometryOpenLogo from "../assets/axiometry-open.png";
+import { LessonViewerModal } from "../components/LessonViewerModal";
 import type { ExamSummary, LessonSummary, SubjectRosterItem, SubjectSummary } from "../types";
 
 type TeacherFocus = "students" | "subjects" | "lessons" | "subject_assignments" | "exams";
@@ -96,6 +97,13 @@ export function TeacherView(props: TeacherViewProps) {
 
   const [lessonFile, setLessonFile] = useState<File | null>(null);
   const [examFile, setExamFile] = useState<File | null>(null);
+  const [lessonPreview, setLessonPreview] = useState<{
+    open: boolean;
+    title: string;
+    subtitle: string;
+    markdown: string;
+  }>({ open: false, title: "", subtitle: "", markdown: "" });
+  const [loadingLessonPreview, setLoadingLessonPreview] = useState(false);
 
   const [activeTab, setActiveTab] = useState<TeacherTab>(() => (showChrome ? "overview" : "students"));
   const [menuOpen, setMenuOpen] = useState(false);
@@ -440,6 +448,23 @@ export function TeacherView(props: TeacherViewProps) {
       await refreshContent();
     } catch (error) {
       setMessage(String(error));
+    }
+  }
+
+  async function openLessonPreview(lesson: LessonSummary) {
+    try {
+      setLoadingLessonPreview(true);
+      const data = await api.lessonContent(lesson.id);
+      setLessonPreview({
+        open: true,
+        title: data.title,
+        subtitle: data.subject.name,
+        markdown: data.markdown,
+      });
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setLoadingLessonPreview(false);
     }
   }
 
@@ -932,7 +957,9 @@ export function TeacherView(props: TeacherViewProps) {
       {activeTab === "lessons" ? (
         <section className="panel stack">
           <h3>Lessons Per Subject</h3>
-          <p className="muted">Upload new lessons and review all lessons under the selected subject.</p>
+          <p className="muted">
+            Upload new lessons and review all lessons under the selected subject. Use Preview to see what students will see.
+          </p>
           <form onSubmit={handleLessonUpload} className="stack">
             <label>
               Lesson ZIP
@@ -951,7 +978,17 @@ export function TeacherView(props: TeacherViewProps) {
             <div className="assignment-grid">
               {visibleLessons.map((lesson) => (
                 <article key={lesson.id} className="assignment-card">
-                  <h4>{lesson.title}</h4>
+                  <div className="assignment-head">
+                    <h4>{lesson.title}</h4>
+                    <button
+                      type="button"
+                      className="button-secondary"
+                      onClick={() => void openLessonPreview(lesson)}
+                      disabled={loadingLessonPreview}
+                    >
+                      Preview
+                    </button>
+                  </div>
                   <p className="assignment-meta">Subject: {lesson.subject.name}</p>
                   <p className="assignment-meta">Lesson ID: {lesson.id}</p>
                   <p className="assignment-meta">Grade Level: {lesson.gradeLevel ?? "n/a"}</p>
@@ -1174,6 +1211,14 @@ export function TeacherView(props: TeacherViewProps) {
           ) : null}
         </section>
       ) : null}
+
+      <LessonViewerModal
+        open={lessonPreview.open}
+        title={lessonPreview.title}
+        subtitle={lessonPreview.subtitle}
+        markdown={lessonPreview.markdown}
+        onClose={() => setLessonPreview({ open: false, title: "", subtitle: "", markdown: "" })}
+      />
 
       {message ? <p className={showChrome ? "admin-feedback success" : ""}>{message}</p> : null}
     </div>

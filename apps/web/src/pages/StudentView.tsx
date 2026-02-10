@@ -3,7 +3,8 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import axiometryLogo from "../assets/axiometry-logo.png";
 import axiometryOpenLogo from "../assets/axiometry-open.png";
-import type { Assignment, ExamDetails } from "../types";
+import { LessonViewerModal } from "../components/LessonViewerModal";
+import type { Assignment, ExamDetails, LessonSummary } from "../types";
 
 interface SubjectGroup {
   subjectId: string;
@@ -11,7 +12,7 @@ interface SubjectGroup {
   count: number;
 }
 
-type StudentTab = "overview" | "subjects" | "exams";
+type StudentTab = "overview" | "subjects" | "lessons" | "exams";
 
 interface StudentViewProps {
   showChrome?: boolean;
@@ -45,6 +46,7 @@ export function StudentView({
   ] as const;
 
   const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [lessons, setLessons] = useState<LessonSummary[]>([]);
   const [selectedSubjectId, setSelectedSubjectId] = useState("");
   const [selectedExam, setSelectedExam] = useState<ExamDetails | null>(null);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
@@ -53,6 +55,13 @@ export function StudentView({
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [result, setResult] = useState<unknown>(null);
   const [message, setMessage] = useState("");
+  const [lessonPreview, setLessonPreview] = useState<{
+    open: boolean;
+    title: string;
+    subtitle: string;
+    markdown: string;
+  }>({ open: false, title: "", subtitle: "", markdown: "" });
+  const [loadingLessonPreview, setLoadingLessonPreview] = useState(false);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<StudentTab>("overview");
@@ -66,8 +75,18 @@ export function StudentView({
     }
   }
 
+  async function refreshLessons() {
+    try {
+      const data = await api.listLessons();
+      setLessons(data);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  }
+
   useEffect(() => {
     void refreshAssignments();
+    void refreshLessons();
   }, []);
 
   const subjectGroups = useMemo<SubjectGroup[]>(() => {
@@ -90,19 +109,47 @@ export function StudentView({
     return [...map.values()].sort((a, b) => a.subjectName.localeCompare(b.subjectName));
   }, [assignments]);
 
+  const lessonSubjectGroups = useMemo<SubjectGroup[]>(() => {
+    const map = new Map<string, SubjectGroup>();
+    for (const lesson of lessons) {
+      const subjectId = lesson.subject?.id ?? "unknown";
+      const subjectName = lesson.subject?.name ?? "Ungrouped";
+      const existing = map.get(subjectId);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        map.set(subjectId, { subjectId, subjectName, count: 1 });
+      }
+    }
+    return [...map.values()].sort((a, b) => a.subjectName.localeCompare(b.subjectName));
+  }, [lessons]);
+
+  const allSubjectGroups = useMemo<SubjectGroup[]>(() => {
+    const map = new Map<string, SubjectGroup>();
+    for (const group of [...subjectGroups, ...lessonSubjectGroups]) {
+      const existing = map.get(group.subjectId);
+      if (existing) {
+        existing.count += group.count;
+      } else {
+        map.set(group.subjectId, { ...group });
+      }
+    }
+    return [...map.values()].sort((a, b) => a.subjectName.localeCompare(b.subjectName));
+  }, [subjectGroups, lessonSubjectGroups]);
+
   useEffect(() => {
-    if (subjectGroups.length === 0) {
+    if (allSubjectGroups.length === 0) {
       setSelectedSubjectId("");
       return;
     }
 
     setSelectedSubjectId((current) => {
-      if (current && subjectGroups.some((group) => group.subjectId === current)) {
+      if (current && allSubjectGroups.some((group) => group.subjectId === current)) {
         return current;
       }
-      return subjectGroups[0].subjectId;
+      return allSubjectGroups[0].subjectId;
     });
-  }, [subjectGroups]);
+  }, [allSubjectGroups]);
 
   const examAssignments = useMemo(
     () => assignments.filter((assignment) => assignment.examId && assignment.exam),
@@ -115,6 +162,31 @@ export function StudentView({
     }
     return examAssignments.filter((assignment) => (assignment.subject?.id ?? "unknown") === selectedSubjectId);
   }, [examAssignments, selectedSubjectId]);
+
+  const visibleLessons = useMemo(() => {
+    if (!selectedSubjectId) {
+      return lessons;
+    }
+    return lessons.filter((lesson) => (lesson.subject?.id ?? "unknown") === selectedSubjectId);
+  }, [lessons, selectedSubjectId]);
+
+  async function openLesson(lesson: LessonSummary) {
+    try {
+      setLoadingLessonPreview(true);
+      const data = await api.lessonContent(lesson.id);
+      setLessonPreview({
+        open: true,
+        title: data.title,
+        subtitle: data.subject.name,
+        markdown: data.markdown,
+      });
+      setActiveTab("lessons");
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setLoadingLessonPreview(false);
+    }
+  }
 
   const selectedAssignment = useMemo(
     () => visibleExamAssignments.find((assignment) => assignment.id === selectedAssignmentId) ?? null,
@@ -205,6 +277,7 @@ export function StudentView({
       [
         { key: "overview" as const, label: "Overview" },
         { key: "subjects" as const, label: "Subjects" },
+        { key: "lessons" as const, label: "Lessons" },
         { key: "exams" as const, label: "Exams" },
       ] satisfies Array<{ key: StudentTab; label: string }>,
     [],
@@ -246,11 +319,11 @@ export function StudentView({
     <section className="panel">
       <h3>Subjects</h3>
       <p className="muted">Choose a subject to view assigned exams.</p>
-      {subjectGroups.length === 0 ? (
+      {allSubjectGroups.length === 0 ? (
         <p className="muted">No assigned content yet. Contact your Axiometry teacher if you expected one.</p>
       ) : (
         <div className="tile-grid">
-          {subjectGroups.map((group) => (
+          {allSubjectGroups.map((group) => (
             <button
               key={group.subjectId}
               type="button"
@@ -263,6 +336,36 @@ export function StudentView({
               <h3>{group.subjectName}</h3>
               <p>{group.count} assignment(s)</p>
               <span className="tile-cta">Open exams</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+
+  const lessonsPanel = (
+    <section className="panel stack">
+      <h3>Lessons</h3>
+      <p className="muted">Open a lesson to read it the same way your teacher preview sees it.</p>
+
+      {visibleLessons.length === 0 ? (
+        <p className="muted">No assigned lessons in this subject yet.</p>
+      ) : (
+        <div className="assignment-grid">
+          {visibleLessons.map((lesson) => (
+            <button
+              type="button"
+              key={lesson.id}
+              className="assignment-card"
+              onClick={() => void openLesson(lesson)}
+              disabled={loadingLessonPreview}
+            >
+              <div className="assignment-head">
+                <h4>{lesson.title}</h4>
+                <span className="tile-cta">Open</span>
+              </div>
+              <p className="assignment-meta">Subject: {lesson.subject?.name ?? "Ungrouped"}</p>
+              <p className="assignment-meta">Grade Level: {lesson.gradeLevel ?? "n/a"}</p>
             </button>
           ))}
         </div>
@@ -399,7 +502,15 @@ export function StudentView({
     <div className={`stack ${showChrome ? "admin-main-content" : ""}`}>
       {activeTab === "overview" ? overviewPanel : null}
       {activeTab === "subjects" ? subjectsPanel : null}
+      {activeTab === "lessons" ? lessonsPanel : null}
       {activeTab === "exams" ? examsPanel : null}
+      <LessonViewerModal
+        open={lessonPreview.open}
+        title={lessonPreview.title}
+        subtitle={lessonPreview.subtitle}
+        markdown={lessonPreview.markdown}
+        onClose={() => setLessonPreview({ open: false, title: "", subtitle: "", markdown: "" })}
+      />
       {message ? <p className={showChrome ? "admin-feedback success" : ""}>{message}</p> : null}
     </div>
   );
@@ -487,22 +598,29 @@ export function StudentView({
                 ))}
               </select>
             </label>
-            <label>
-              Subject filter
-              <select value={selectedSubjectId} onChange={(event) => setSelectedSubjectId(event.target.value)}>
-                <option value="">All subjects</option>
-                {subjectGroups.map((group) => (
-                  <option key={group.subjectId} value={group.subjectId}>
-                    {group.subjectName}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="row-wrap">
-              <button type="button" className="button-secondary" onClick={() => void refreshAssignments()}>
-                Refresh
-              </button>
-            </div>
+	            <label>
+	              Subject filter
+	              <select value={selectedSubjectId} onChange={(event) => setSelectedSubjectId(event.target.value)}>
+	                <option value="">All subjects</option>
+	                {allSubjectGroups.map((group) => (
+	                  <option key={group.subjectId} value={group.subjectId}>
+	                    {group.subjectName}
+	                  </option>
+	                ))}
+	              </select>
+	            </label>
+	            <div className="row-wrap">
+	              <button
+                  type="button"
+                  className="button-secondary"
+                  onClick={() => {
+                    void refreshAssignments();
+                    void refreshLessons();
+                  }}
+                >
+	                Refresh
+	              </button>
+	            </div>
           </div>
         </section>
       ) : null}
@@ -524,4 +642,3 @@ export function StudentView({
     </div>
   );
 }
-
